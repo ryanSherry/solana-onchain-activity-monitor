@@ -287,8 +287,10 @@ def read_history_rows(csv_dir, day=None):
 # --------------------------------------------------------------------------- #
 def main():
     ap = argparse.ArgumentParser(description="Solana on-chain activity surge monitor")
-    ap.add_argument("--rpc", default=os.environ.get("SOLANA_RPC", sources.DEFAULT_RPC),
-                    help="Solana RPC URL (default: public mainnet-beta, or $SOLANA_RPC)")
+    ap.add_argument("--rpc", default=None,
+                    help="override RPC endpoints (comma/space list, highest "
+                         "priority first); default = SOLANA_RPC + "
+                         "SOLANA_RPC_FALLBACKS (with failover)")
     ap.add_argument("--interval", type=int, default=60, help="seconds between polls")
     ap.add_argument("--once", action="store_true", help="single snapshot then exit")
     ap.add_argument("--no-movers", action="store_true", help="skip GeckoTerminal calls")
@@ -297,11 +299,14 @@ def main():
     ap.add_argument("--csv-dir", default=os.path.join(os.path.dirname(__file__), "data"))
     args = ap.parse_args()
 
+    rpc, endpoints = sources.build_pool(args.rpc)
+
     os.makedirs(args.csv_dir, exist_ok=True)
     tracker = SurgeTracker()
     for r in read_history_rows(args.csv_dir):
         tracker.update(r)
-    print(f"RPC: {args.rpc}", file=sys.stderr)
+    print(f"RPC pool ({len(endpoints)}): "
+          f"{', '.join(sources._node_label(e) for e in endpoints)}", file=sys.stderr)
     print(f"poll every {args.interval}s · CSV -> {args.csv_dir}/activity_<date>.csv",
           file=sys.stderr)
 
@@ -318,7 +323,7 @@ def main():
     while True:
         try:
             row, movers, pump_connected, meme_by_program = collect(
-                args.rpc, with_movers=not args.no_movers, pump=pump)
+                rpc, with_movers=not args.no_movers, pump=pump)
             warming = tracker.warming()
             score, level, comps = tracker.compute(row)
             row["surge_score"], row["surge_level"] = score, level

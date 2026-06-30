@@ -42,13 +42,36 @@ runs, the app runs.
 **Configuration is via one optional setting — the Solana RPC URL.** Resolution
 order (first wins):
 
-1. `--rpc <url>` command-line flag
-2. `SOLANA_RPC` environment variable
-3. `.env.onchain-activity` file in this folder (`KEY=value` lines)
-4. the hardcoded fallback in `sources.py`
+1. `--rpc <url>` command-line flag (accepts a comma/space list = primary first)
+2. `SOLANA_RPC` (primary) + `SOLANA_RPC_FALLBACKS` (ordered backups) env vars
+3. the same two keys in the `.env.onchain-activity` file in this folder
+4. the hardcoded public fallback in `sources.py`
 
 So out of the box it just works; you only need to set anything if you want a
 different RPC endpoint.
+
+### RPC failover (primary + backups)
+
+For resilience you can give the app an **ordered pool** of RPC nodes instead of
+one. `SOLANA_RPC` is the primary; `SOLANA_RPC_FALLBACKS` is a comma/space-
+separated list of backups, highest priority first:
+
+```bash
+SOLANA_RPC=https://<primary-node>/<token>
+SOLANA_RPC_FALLBACKS=https://<backup-1>/<token>, https://<backup-2>/<token>
+```
+
+Behaviour (`sources.RpcPool`): every call prefers the highest-priority node that
+isn't in a failure cooldown; on a transport/availability error (timeout /
+connection / HTTP 4xx-5xx incl. 429) it cools that node down briefly and falls
+through to the next. JSON-RPC *application* errors (a node answering with an
+`error` payload — e.g. an out-of-range query) are **not** treated as failover
+events; they raise through without benching the node. A recovered node is
+**automatically promoted back** to primary once its cooldown lapses — no manual
+reset. Live status (which node is active, per-node health,
+optional region label) is exposed at `/api/data` under `rpc[]` and shown as a
+badge in the dashboard header. Leave `SOLANA_RPC_FALLBACKS` blank to run a single
+node — behaviour is then identical to before.
 
 ### About the `.env` clash you asked about
 

@@ -17,7 +17,11 @@ home-IP-exposure concern and no proxy needed.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
+import threading
+import time
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -53,7 +57,43 @@ PUBLIC_RPC = "https://api.mainnet-beta.solana.com"
 # falls back to the public endpoint, which is heavily rate-limited and will make
 # the dashboard flaky under this tool's load (16 RPC calls / 5s).
 RPC_CONFIGURED = bool(os.environ.get("SOLANA_RPC"))
-DEFAULT_RPC = os.environ.get("SOLANA_RPC") or PUBLIC_RPC
+
+
+def _split_urls(s: str) -> list:
+    """Comma- or whitespace-separated URL list -> ordered, de-duplicated list."""
+    if not s:
+        return []
+    parts = [p.strip() for p in re.split(r"[,\s]+", s) if p.strip()]
+    return list(dict.fromkeys(parts))  # dedup, preserve order
+
+
+# Ordered RPC endpoints, highest priority first. SOLANA_RPC is the primary (it
+# may itself be a comma/space list); SOLANA_RPC_FALLBACKS are the fallbacks in
+# the order to try them. With nothing set we fall back to the public endpoint.
+# All three URLs embed access tokens -> secrets, kept in .env.onchain-activity.
+RPC_ENDPOINTS = (
+    _split_urls(os.environ.get("SOLANA_RPC", ""))
+    + _split_urls(os.environ.get("SOLANA_RPC_FALLBACKS", ""))
+)
+RPC_ENDPOINTS = list(dict.fromkeys(RPC_ENDPOINTS)) or [PUBLIC_RPC]
+DEFAULT_RPC = RPC_ENDPOINTS[0]  # primary (back-compat alias)
+
+# Human-friendly region label per node, keyed by the HelloMoon node codename in
+# the URL (survives token rotation). Cosmetic only -- makes a failover legible
+# ("failover -> Amsterdam" beats an opaque codename). Update if nodes change; an
+# unmapped node just falls back to showing its codename.
+RPC_REGIONS = {
+    "supernatural-atlas": "FRA",
+    "terrestrial-nebula": "AMS",
+    "aerial-aurora":      "NY",
+}
+
+
+def _region(url: str):
+    for codename, region in RPC_REGIONS.items():
+        if codename in url:
+            return region
+    return None
 GECKO_BASE = "https://api.geckoterminal.com/api/v2"
 
 _UA = "onchain-activity-monitor/0.1"
@@ -87,7 +127,31 @@ def _http(req: urllib.request.Request, timeout: int = 20):
         return json.loads(r.read().decode())
 
 
-def rpc_call(url: str, method: str, params=None, timeout: int = 20):
+def _mask_url(url: str) -> str:
+    """Host + last 4 chars of the token, for logs/UI -- never the full secret."""
+    try:
+        host = url.split("://", 1)[1].split("/", 1)[0]
+        tail = url.rstrip("/")[-4:]
+        return f"{host}/…{tail}" if "/" in url.split("://", 1)[1] else host
+    except Exception:
+        return "rpc"
+
+
+def _node_label(url: str) -> str:
+    """Region name if known (e.g. 'Amsterdam'), else the masked host -- for
+    logs and the startup banner, where a region is more legible than a codename."""
+    return _region(url) or _mask_url(url)
+
+
+class RpcAppError(RuntimeError):
+    """A JSON-RPC *application* error (the node answered with an `error` payload).
+    Distinct from a transport/availability failure: it means the request itself
+    was rejected (bad params, unsupported range, ...), NOT that the node is
+    unhealthy -- so the pool must NOT fail over or cool the node on it (every
+    node would reject it identically, and a healthy node would be benched)."""
+
+
+def _rpc_call_one(url: str, method: str, params=None, timeout: int = 20):
     body = json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}
     ).encode()
@@ -99,8 +163,107 @@ def rpc_call(url: str, method: str, params=None, timeout: int = 20):
     )
     data = _http(req, timeout=timeout)
     if "error" in data:
-        raise RuntimeError(f"RPC {method} error: {data['error']}")
+        raise RpcAppError(f"RPC {method} error: {data['error']}")
     return data["result"]
+
+
+class RpcPool:
+    """Ordered RPC endpoints with automatic failover and self-healing failback.
+
+    A call always prefers the highest-priority endpoint NOT currently in a
+    failure cooldown; on a transport/availability error it cools that endpoint
+    down (exponential backoff, capped) and falls through to the next one. Because
+    selection always restarts from the top, a recovered primary reclaims traffic
+    on its own as soon as its cooldown lapses -- no background probe thread, no
+    manual reset. Thread-safe: the surge loop fires ~12 calls/tick concurrently.
+
+    JSON-RPC *application* errors (RpcAppError) are NOT failover events -- they
+    raise straight through without cooling or switching, since every node would
+    reject the request identically (see RpcAppError).
+    """
+    BASE_COOLDOWN = 20.0   # seconds for a first failure
+    MAX_COOLDOWN = 300.0   # cap after repeated failures
+
+    def __init__(self, urls, timeout: int = 20):
+        urls = [u for u in dict.fromkeys(urls) if u]
+        if not urls:
+            raise ValueError("RpcPool needs at least one endpoint")
+        self._eps = [{"url": u, "failed_until": 0.0, "streak": 0} for u in urls]
+        self._timeout = timeout
+        self._lock = threading.Lock()
+        self._active = urls[0]
+
+    @property
+    def primary(self) -> str:
+        return self._eps[0]["url"]
+
+    def _ordered(self, now):
+        ready = [e for e in self._eps if e["failed_until"] <= now]
+        cooling = [e for e in self._eps if e["failed_until"] > now]
+        # if every endpoint is cooling, still try -- soonest-recovered first
+        return ready + sorted(cooling, key=lambda e: e["failed_until"])
+
+    def call(self, method, params=None, timeout=None):
+        last_exc = None
+        for e in self._ordered(time.time()):
+            try:
+                result = _rpc_call_one(e["url"], method, params,
+                                       timeout or self._timeout)
+                with self._lock:
+                    e["streak"] = 0
+                    e["failed_until"] = 0.0
+                    if self._active != e["url"]:
+                        prev, self._active = self._active, e["url"]
+                        print(f"[rpc] switched to {_node_label(e['url'])} "
+                              f"(from {_node_label(prev)})", flush=True)
+                return result
+            except RpcAppError:
+                # request-level rejection, not a node-health signal: don't cool
+                # or fail over -- the caller's try/except handles it.
+                raise
+            except Exception as exc:
+                last_exc = exc
+                with self._lock:
+                    now = time.time()
+                    # Only escalate on a genuinely fresh failure -- concurrent
+                    # siblings in the same tick must not inflate the streak.
+                    if e["failed_until"] <= now:
+                        e["streak"] += 1
+                    backoff = min(self.BASE_COOLDOWN * 2 ** (e["streak"] - 1),
+                                  self.MAX_COOLDOWN)
+                    e["failed_until"] = now + backoff
+                print(f"[rpc] {_node_label(e['url'])} failed on {method}: {exc} "
+                      f"-> cooldown {int(backoff)}s", flush=True)
+        raise last_exc if last_exc else RuntimeError("no RPC endpoints")
+
+    def status(self):
+        """Per-endpoint health snapshot for /api/data (tokens masked)."""
+        now = time.time()
+        with self._lock:
+            return [{
+                "endpoint": _mask_url(e["url"]),
+                "region": _region(e["url"]),         # short code (FRA/AMS/NY) or null
+                "priority": i,                       # 0 = primary
+                "healthy": e["failed_until"] <= now,
+                "cooldown_s": max(0, math.ceil(e["failed_until"] - now)),
+                "active": e["url"] == self._active,
+            } for i, e in enumerate(self._eps)]
+
+
+def rpc_call(endpoint, method: str, params=None, timeout: int = 20):
+    """Dispatch: an RpcPool (failover) or a single URL string (direct)."""
+    if isinstance(endpoint, RpcPool):
+        return endpoint.call(method, params, timeout)
+    return _rpc_call_one(endpoint, method, params, timeout)
+
+
+def build_pool(override=None):
+    """Build the RpcPool shared by both entry points. `override` is an optional
+    comma/space-separated endpoint list (the `--rpc` flag); a blank/empty
+    override (incl. whitespace-only) cleanly falls back to the configured
+    RPC_ENDPOINTS instead of crashing. Returns (pool, endpoints)."""
+    endpoints = _split_urls(override) or RPC_ENDPOINTS
+    return RpcPool(endpoints), endpoints
 
 
 def _gecko_get(path: str, timeout: int = 20):

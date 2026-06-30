@@ -31,6 +31,10 @@ Do these in order. It's intentionally tiny — there is nothing to install.
    - If the user can't provide one, the app still runs on the public endpoint
      (`api.mainnet-beta.solana.com`) but it's heavily rate-limited and the
      dashboard will be flaky. The server prints a warning in this case.
+   - **Optional failover:** set `SOLANA_RPC_FALLBACKS=<url2>, <url3>` (ordered,
+     comma/space-separated backups) for an automatic failover pool. See README
+     "RPC failover" and docs/NOTES.md §4 (`sources.RpcPool`). Region labels for
+     the badge/logs live in `sources.RPC_REGIONS`.
 
 3. **Start it** (background):
    ```bash

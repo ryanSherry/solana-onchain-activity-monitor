@@ -50,6 +50,7 @@ _state = {
     "jito": {},
     "sol": {},
     "movers": [],
+    "rpc": [],                         # RPC pool health (failover status)
     "history": deque(maxlen=480),      # fine-grained recent chart (~4h at 30s)
     "history24h": deque(maxlen=6000),  # {t, surge_score} for the 24h chart
 }
@@ -114,7 +115,7 @@ def _downsample(samples, n=240):
     return {"t": out_t, "surge_score": out_v}
 
 
-def _surge_loop(rpc_url, interval, csv_dir):
+def _surge_loop(rpc, interval, csv_dir):
     """Fast loop: RPC-only (no GeckoTerminal). Drives the surge gauge + charts.
     HelloMoon handles 7 calls/tick easily, so this can run every few seconds.
     Period-accurate: sleeps interval minus the time the tick actually took."""
@@ -141,11 +142,11 @@ def _surge_loop(rpc_url, interval, csv_dir):
         try:
             # with_movers=False => no GeckoTerminal calls in the fast loop
             row, _m, _c, meme_by_program = monitor.collect(
-                rpc_url, with_movers=False, pump=_pump)
+                rpc, with_movers=False, pump=_pump)
             # skip rate changes over a ~10-min window -- refresh every 15s and
             # carry the value forward on intervening ticks (last-known-good)
             if start - last_health >= 15:
-                h = sources.network_health(rpc_url)
+                h = sources.network_health(rpc)
                 if h.get("skip_rate") is not None:
                     cur_skip = h["skip_rate"]
                 last_health = start
@@ -160,6 +161,7 @@ def _surge_loop(rpc_url, interval, csv_dir):
             now = time.time()
             with _lock:
                 _state["latest"] = row
+                _state["rpc"] = rpc.status()
                 _state["components"] = comps
                 if meme_by_program:
                     _state["meme_by_program"] = meme_by_program
@@ -221,6 +223,7 @@ def _snapshot():
             "jito": _state["jito"],
             "sol": _state["sol"],
             "movers": _state["movers"],
+            "rpc": _state["rpc"],
         }
     # fresh pump rates (continuous between collection ticks)
     if _pump is not None:
@@ -264,7 +267,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description="On-chain activity dashboard server")
-    ap.add_argument("--rpc", default=os.environ.get("SOLANA_RPC", sources.DEFAULT_RPC))
+    ap.add_argument("--rpc", default=None,
+                    help="override RPC endpoints (comma/space list, highest "
+                         "priority first); default = SOLANA_RPC + "
+                         "SOLANA_RPC_FALLBACKS from the env file")
     ap.add_argument("--interval", type=int, default=5,
                     help="surge gauge refresh seconds (RPC, HelloMoon)")
     ap.add_argument("--movers-interval", type=int, default=15,
@@ -274,20 +280,25 @@ def main():
     ap.add_argument("--csv-dir", default=os.path.join(HERE, "data"))
     args = ap.parse_args()
 
+    rpc, endpoints = sources.build_pool(args.rpc)
+    _state["rpc"] = rpc.status()
+
     _state["interval"] = args.interval
     _state["movers_interval"] = args.movers_interval
     threading.Thread(target=_surge_loop,
-                     args=(args.rpc, args.interval, args.csv_dir), daemon=True).start()
+                     args=(rpc, args.interval, args.csv_dir), daemon=True).start()
     threading.Thread(target=_movers_loop,
                      args=(args.movers_interval,), daemon=True).start()
 
-    if args.rpc == sources.PUBLIC_RPC:
+    if endpoints == [sources.PUBLIC_RPC]:
         print("WARNING: no SOLANA_RPC configured -- using the public endpoint, "
               "which is heavily rate-limited and will make the dashboard flaky. "
               "Set SOLANA_RPC in .env.onchain-activity (see .env.onchain-activity.example).")
 
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"dashboard: http://{args.host}:{args.port}   (RPC {args.rpc})")
+    print(f"dashboard: http://{args.host}:{args.port}")
+    print(f"RPC pool ({len(endpoints)}): "
+          f"{', '.join(sources._node_label(e) for e in endpoints)}")
     print(f"surge every {args.interval}s · movers every {args.movers_interval}s "
           f"— open the URL in a browser")
     try:

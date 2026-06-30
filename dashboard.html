@@ -6,35 +6,61 @@
 <title>Solana on-chain activity</title>
 <style>
   :root{
-    --bg:#0b0e14; --card:#141a23; --line:#222c3a; --tx:#e6edf3; --mut:#8b949e;
-    --green:#3fb950; --blue:#58a6ff; --orange:#db6d28; --red:#f85149; --purple:#bc8cff;
+    --bg:#0a0911; --card:#14121d; --line:#272238; --tx:#ece9f6; --mut:#8b86a3;
+    --green:#14f195; --blue:#3fc8ff; --orange:#f2a93b; --red:#ff4d6d; --purple:#b388ff;
+    --brand:#9945ff; --brand2:#14f195;        /* Solana identity gradient endpoints */
+    --surge:#8b86a3;                          /* live surge tint, set by JS each tick */
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--tx);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,Roboto,sans-serif}
+  body{margin:0;color:var(--tx);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,Roboto,sans-serif;
+    background:radial-gradient(125% 65% at 50% -12%,rgba(153,69,255,.11),transparent 58%),var(--bg)}
+  /* SIGNATURE — the page's top edge is the gauge: a full-width rail that shifts
+     mint->hot with the live surge level (--surge), pulsing while surging. */
+  body::before{content:"";position:fixed;inset:0 0 auto 0;height:3px;z-index:60;
+    pointer-events:none;background:var(--surge);box-shadow:0 0 14px 0 var(--surge);
+    transition:background .7s ease,box-shadow .7s ease}
+  body.surging::before{animation:railPulse 1.8s ease-in-out infinite}
+  @keyframes railPulse{0%,100%{box-shadow:0 0 10px 0 var(--surge)}
+    50%{box-shadow:0 0 22px 2px var(--surge)}}
+  /* typographic voice: humanist sans for labels, monospace for all telemetry */
+  .g-num,.g-lvl,.jstat .jv,.mcard .val,.solprice,.rpcbadge,.chart-cap,.zones,
+  table,.driver .dv,.venue .vmeta{font-family:var(--mono)}
+  /* respect OS "reduce motion": neutralize the looping pulses/glows (incl. the
+     always-on surge rail) without affecting layout */
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001ms!important;animation-iteration-count:1!important}
+  }
   header{display:flex;align-items:center;justify-content:space-between;
     padding:16px 24px;border-bottom:1px solid var(--line)}
-  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px;color:var(--mut)}
+  header h1{font-size:15px;margin:0;font-weight:700;letter-spacing:1.3px;color:var(--purple);
+    background:linear-gradient(90deg,var(--brand),var(--brand2));
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   header .meta{font-size:12px;color:var(--mut);text-align:right}
   .live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--green);justify-content:flex-end}
   .live.off{color:var(--mut)}
   .live .pulse{width:8px;height:8px;border-radius:50%;background:currentColor}
   .live:not(.off) .pulse{animation:pulse 1.6s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.5)}70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(20,241,149,.5)}70%{box-shadow:0 0 0 7px rgba(20,241,149,0)}100%{box-shadow:0 0 0 0 rgba(20,241,149,0)}}
   .fresh{font-size:11px;color:var(--mut);font-weight:400;letter-spacing:0;text-transform:none;white-space:nowrap}
   .solprice{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap}
   .solprice .chg{margin-left:5px;font-weight:600}
+  .rpcbadge{font-size:11px;color:var(--mut);margin-top:3px;white-space:nowrap}
+  .rpcbadge .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+    margin-right:4px;vertical-align:middle;background:var(--green)}
+  .rpcbadge.warn{color:var(--orange)} .rpcbadge.warn .dot{background:var(--orange)}
   .surge-live-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
   .refresh-bar{height:2px;width:64px;border-radius:2px;background:var(--green);transform-origin:left;transform:scaleX(0)}
   .hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
   .h2row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
   .jito-row{display:flex;gap:14px;flex-wrap:wrap}
-  .jstat{flex:1;min-width:130px;background:#0f141c;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .jstat{flex:1;min-width:130px;background:#0e0c16;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
   .jstat .jl{font-size:11px;color:var(--mut);margin-bottom:4px}
   .jstat .jv{font-size:22px;font-weight:700}
   .jstat .ju{font-size:11px;color:var(--mut);font-weight:400;margin-left:3px}
   .hero.surging{animation:surgeGlow 1.8s ease-in-out infinite}
-  @keyframes surgeGlow{0%,100%{box-shadow:0 0 0 1px rgba(248,81,73,0)}50%{box-shadow:0 0 26px 1px rgba(248,81,73,.45)}}
+  @keyframes surgeGlow{0%,100%{box-shadow:0 0 0 1px rgba(255,77,109,0)}50%{box-shadow:0 0 26px 1px rgba(255,77,109,.45)}}
   .wrap{padding:22px;max-width:1100px;margin:0 auto}
 
   /* ---- hero surge meter ---- */
@@ -65,7 +91,7 @@
   .info{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;
     border:1px solid var(--mut);color:var(--mut);font-size:9px;cursor:help;position:relative;vertical-align:middle}
   .info:hover::after{content:attr(data-tip);position:absolute;bottom:155%;right:-4px;width:235px;
-    background:#0c1118;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:11px;font-weight:400;
+    background:#0b0a12;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:11px;font-weight:400;
     color:var(--tx);letter-spacing:0;text-transform:none;line-height:1.45;z-index:20;text-align:left;
     white-space:normal;box-shadow:0 6px 18px rgba(0,0,0,.55)}
   .info.hdr:hover::after{right:auto;left:-2px}
@@ -100,17 +126,17 @@
   .drivers{margin-bottom:18px}
   .driver{display:grid;grid-template-columns:130px 1fr 46px;align-items:center;gap:10px;margin:7px 0}
   .driver .dl{font-size:12px;color:var(--mut)}
-  .driver .dbar{height:12px;background:#0c1118;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+  .driver .dbar{height:12px;background:#0b0a12;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
   .driver .dfill{height:100%;border-radius:6px;transition:width .4s}
   .driver .dv{font-size:11px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
-  .mcard{background:#0f141c;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .mcard{background:#0e0c16;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
   .mcard .lbl{font-size:11px;color:var(--mut);margin-bottom:3px}
   .mcard .val{font-size:22px;font-weight:600}
   .mcard .val small{font-size:11px;color:var(--mut);font-weight:400;margin-left:4px}
   .mcard canvas{width:100%;height:36px;display:block;margin-top:6px}
   .venue{display:grid;grid-template-columns:78px 1fr 130px;align-items:center;gap:12px;margin:8px 0}
-  .venue .vbar{height:16px;background:#0c1118;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+  .venue .vbar{height:16px;background:#0b0a12;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
   .venue .vfill{height:100%;background:var(--blue);border-radius:5px}
   .venue .vmeta{font-size:12px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums}
 </style>
@@ -120,6 +146,7 @@
   <h1>SOLANA ON-CHAIN ACTIVITY</h1>
   <div class="meta">
     <div class="solprice" id="solprice"></div>
+    <div class="rpcbadge" id="rpcbadge"></div>
   </div>
 </header>
 
@@ -195,16 +222,16 @@
 
 <script>
 const TH={SURGE:60,ELEVATED:38,BUSY:18,CALM:0};
-const LEVEL_COLOR={CALM:'#3fb950',BUSY:'#58a6ff',ELEVATED:'#db6d28',SURGE:'#f85149'};
+const LEVEL_COLOR={CALM:'#14f195',BUSY:'#3fc8ff',ELEVATED:'#f2a93b',SURGE:'#ff4d6d'};
 const LEVEL_WORD={CALM:'Calm',BUSY:'Busy',ELEVATED:'Elevated',SURGE:'Surging'};
 const CARDS=[
-  {k:'nonvote_tps',  lbl:'Network TPS',       unit:'tx/s',    fmt:'int', color:'#58a6ff'},
-  {k:'skip_rate',    lbl:'Slot skip rate',    unit:'of slots', fmt:'pct1',color:'#d29922'},
-  {k:'meme_tps',     lbl:'DEX trade rate',    unit:'tx/s',    fmt:'int', color:'#3fb950'},
-  {k:'meme_fail_rate',lbl:'DEX failure rate', unit:'',        fmt:'pct', color:'#f85149'},
-  {k:'fee_p90',      lbl:'Landing fee (p90)', unit:'µlam/CU', fmt:'int', color:'#db6d28'},
-  {k:'fee_contention',lbl:'Fee contention',   unit:'of slots',fmt:'pct', color:'#bc8cff'},
-  {k:'pump_launches_min',lbl:'Launches / min',unit:'pump.fun',fmt:'int', color:'#bc8cff'},
+  {k:'nonvote_tps',  lbl:'Network TPS',       unit:'tx/s',    fmt:'int', color:'#3fc8ff'},
+  {k:'skip_rate',    lbl:'Slot skip rate',    unit:'of slots', fmt:'pct1',color:'#e3b341'},
+  {k:'meme_tps',     lbl:'DEX trade rate',    unit:'tx/s',    fmt:'int', color:'#14f195'},
+  {k:'meme_fail_rate',lbl:'DEX failure rate', unit:'',        fmt:'pct', color:'#ff4d6d'},
+  {k:'fee_p90',      lbl:'Landing fee (p90)', unit:'µlam/CU', fmt:'int', color:'#f2a93b'},
+  {k:'fee_contention',lbl:'Fee contention',   unit:'of slots',fmt:'pct', color:'#b388ff'},
+  {k:'pump_launches_min',lbl:'Launches / min',unit:'pump.fun',fmt:'int', color:'#b388ff'},
 ];
 function levelFor(v){return v>=TH.SURGE?'SURGE':v>=TH.ELEVATED?'ELEVATED':v>=TH.BUSY?'BUSY':'CALM';}
 const LEVEL_EMOJI={CALM:'🟢',BUSY:'🔵',ELEVATED:'🟠',SURGE:'🔴'};
@@ -227,7 +254,7 @@ function agoStr(s){s=Math.max(0,s);if(s<2)return 'just now';if(s<60)return Math.
 // freshness heartbeat: green when fresh, warming to red as it ages toward the
 // next refresh, then back to green when new data lands
 function freshColor(age,cadence){const r=age/(cadence||15);
-  return r<0.45?'#3fb950':r<0.8?'#d29922':r<1.4?'#db6d28':'#f85149';}
+  return r<0.45?'#14f195':r<0.8?'#e3b341':r<1.4?'#f2a93b':'#ff4d6d';}
 function updateFresh(){const n=Date.now();
   const su=freshRef.surge.age+(n-freshRef.surge.t)/1000;
   const el=document.getElementById('surge-live');
@@ -249,8 +276,8 @@ setInterval(updateFresh,1000);
 function ageCell(created,now){
   if(!created)return '<td>—</td>';
   const s=now-created;let lab,col;
-  if(s<3600){lab=Math.max(1,Math.round(s/60))+'m';col='#3fb950';}        // <1h: green
-  else if(s<86400){lab=(s/3600).toFixed(s<36000?1:0).replace('.0','')+'h';col='#58a6ff';} // hours: blue
+  if(s<3600){lab=Math.max(1,Math.round(s/60))+'m';col='#14f195';}        // <1h: green
+  else if(s<86400){lab=(s/3600).toFixed(s<36000?1:0).replace('.0','')+'h';col='#3fc8ff';} // hours: blue
   else if(s<7*86400){lab=Math.round(s/86400)+'d';col='var(--tx)';}        // days: normal
   else{lab=Math.round(s/86400)+'d';col='var(--mut)';}                     // >1wk: gray
   return `<td style="color:${col};font-weight:600">${lab}</td>`;
@@ -270,7 +297,15 @@ function usd(v){if(v===null||v===undefined)return '—';
   for(const [d,s] of [[1e9,'B'],[1e6,'M'],[1e3,'K']])if(Math.abs(v)>=d)return '$'+(v/d).toFixed(1)+s;
   return '$'+(v).toFixed(0);}
 function price(v){if(v===null||v===undefined)return '—';
-  if(v>=1)return '$'+v.toFixed(2); if(v>=0.0001)return '$'+v.toFixed(5); return '$'+v.toExponential(2);}
+  if(v>=1)return '$'+v.toFixed(2);
+  if(v>=0.0001)return '$'+v.toFixed(5);
+  if(v<=0)return '$0';
+  // sub-$0.0001: DexScreener-style subscript-zero notation, e.g. 0.0000508 -> $0.0₄508
+  const [mant,exp]=v.toExponential(2).split('e');
+  const zeros=-parseInt(exp,10)-1;
+  const sub=String(zeros).replace(/[0-9]/g,d=>'₀₁₂₃₄₅₆₇₈₉'[+d]);
+  const digits=mant.replace('.','').replace(/0+$/,'')||'0';
+  return '$0.0'+sub+digits;}
 function pctCell(v){if(v===null||v===undefined)return '<td>—</td>';
   const c=v>=0?'up':'down';return `<td class="${c}">${v>=0?'+':''}${v.toFixed(0)}%</td>`;}
 /* Upward Surge 0-10: gated to coins rising RIGHT NOW (5m up), then sized by
@@ -304,10 +339,10 @@ function surgeScore(m){
 }
 function surgeBar(sc,m){
   if(sc<=0)return '<td>—</td>';
-  const col=sc>=4?'#f85149':sc>=2?'#db6d28':'#d29922';
+  const col=sc>=4?'#ff4d6d':sc>=2?'#f2a93b':'#e3b341';
   return `<td title="surging +${(m.chg_h1||0).toFixed(0)}% 1h · ${usd(m.vol_h1)} of 1h volume · ${m.txns_5m||0} trades/5m (MC ${usd(m.mc)})">`+
     `<div style="display:flex;align-items:center;gap:7px;justify-content:flex-end">`+
-    `<div style="flex:0 0 40px;height:7px;background:#0c1118;border:1px solid var(--line);border-radius:4px;overflow:hidden">`+
+    `<div style="flex:0 0 40px;height:7px;background:#0b0a12;border:1px solid var(--line);border-radius:4px;overflow:hidden">`+
     `<div style="height:100%;width:${sc*20}%;background:${col}"></div></div>`+
     `<span style="color:${col};font-weight:700;min-width:24px">${sc}/5</span></div></td>`;}
 
@@ -325,7 +360,7 @@ function drawGauge(cv,value,level){
   cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);
   const cx=w/2,cy=h*0.97,r=Math.min(w/2,h)*0.9,lw=Math.max(15,r*0.17);
   const A=v=>Math.PI+(Math.max(0,Math.min(100,v))/100)*Math.PI;
-  const zones=[[0,18,'#3fb950'],[18,38,'#58a6ff'],[38,60,'#db6d28'],[60,100,'#f85149']];
+  const zones=[[0,18,'#14f195'],[18,38,'#3fc8ff'],[38,60,'#f2a93b'],[60,100,'#ff4d6d']];
   c.lineWidth=lw;c.lineCap='butt';
   zones.forEach(([a,b,col])=>{c.beginPath();c.strokeStyle=col;c.globalAlpha=.32;c.arc(cx,cy,r,A(a),A(b));c.stroke();});
   c.globalAlpha=1;
@@ -334,8 +369,8 @@ function drawGauge(cv,value,level){
   // needle
   const ang=A(value);
   c.beginPath();c.moveTo(cx,cy);c.lineTo(cx+Math.cos(ang)*(r*0.98),cy+Math.sin(ang)*(r*0.98));
-  c.lineWidth=2.5;c.strokeStyle='#e6edf3';c.stroke();
-  c.beginPath();c.arc(cx,cy,5,0,7);c.fillStyle='#e6edf3';c.fill();
+  c.lineWidth=2.5;c.strokeStyle='#ece9f6';c.stroke();
+  c.beginPath();c.arc(cx,cy,5,0,7);c.fillStyle='#ece9f6';c.fill();
 }
 
 /* ---- hero trend chart (surge level 0-100 over a TIME axis) ----
@@ -354,24 +389,24 @@ function drawHero(cv,times,vals,level,domain,opts){
   const X=t=>padL+W*((t-t0)/(t1-t0));
   const Y=v=>padT+H*(1-v/100);
   // x-axis baseline + time ticks
-  c.strokeStyle='#222c3a';c.lineWidth=1;c.beginPath();c.moveTo(padL,padT+H);c.lineTo(w-padR,padT+H);c.stroke();
+  c.strokeStyle='#272238';c.lineWidth=1;c.beginPath();c.moveTo(padL,padT+H);c.lineTo(w-padR,padT+H);c.stroke();
   const K=4;c.font='10px sans-serif';
   for(let i=0;i<=K;i++){
     const tt=t0+(t1-t0)*i/K,x=X(tt);
-    c.globalAlpha=.5;c.strokeStyle='#1b2430';c.beginPath();c.moveTo(x,padT);c.lineTo(x,padT+H);c.stroke();c.globalAlpha=1;
-    c.fillStyle='#6e7681';c.textAlign=i===0?'left':i===K?'right':'center';
+    c.globalAlpha=.5;c.strokeStyle='#1c1830';c.beginPath();c.moveTo(x,padT);c.lineTo(x,padT+H);c.stroke();c.globalAlpha=1;
+    c.fillStyle='#6f6a86';c.textAlign=i===0?'left':i===K?'right':'center';
     c.fillText(fmtClock(tt),x,h-6);
   }
   c.textAlign='left';
   // threshold lines
-  [[TH.ELEVATED,'#db6d28','Elevated'],[TH.SURGE,'#f85149','Surging']].forEach(([v,col,lab])=>{
+  [[TH.ELEVATED,'#f2a93b','Elevated'],[TH.SURGE,'#ff4d6d','Surging']].forEach(([v,col,lab])=>{
     c.strokeStyle=col;c.globalAlpha=.32;c.setLineDash([4,4]);c.beginPath();c.moveTo(padL,Y(v));c.lineTo(w-padR,Y(v));c.stroke();
     c.setLineDash([]);c.globalAlpha=.6;c.fillStyle=col;c.fillText(lab,padL+2,Y(v)-3);c.globalAlpha=1;
   });
   // data (plotted by actual time)
   const pts=[];for(let i=0;i<times.length;i++)if(vals[i]!=null&&times[i]>=t0&&times[i]<=t1)pts.push([times[i],vals[i]]);
   if(pts.length<2)return;
-  const col=LEVEL_COLOR[level]||'#58a6ff';
+  const col=LEVEL_COLOR[level]||'#3fc8ff';
   // area
   c.beginPath();c.moveTo(X(pts[0][0]),Y(pts[0][1]));
   for(const[t,v]of pts)c.lineTo(X(t),Y(v));
@@ -386,8 +421,8 @@ function drawHero(cv,times,vals,level,domain,opts){
   if(opts&&opts.markPeak){
     let pk=pts[0];for(const p of pts)if(p[1]>pk[1])pk=p;
     const px=X(pk[0]),py=Y(pk[1]);
-    c.beginPath();c.arc(px,py,3.5,0,7);c.lineWidth=1.5;c.strokeStyle='#e6edf3';c.stroke();
-    c.fillStyle='#e6edf3';c.font='10px sans-serif';c.textAlign=px>w-52?'right':'center';
+    c.beginPath();c.arc(px,py,3.5,0,7);c.lineWidth=1.5;c.strokeStyle='#ece9f6';c.stroke();
+    c.fillStyle='#ece9f6';c.font='10px sans-serif';c.textAlign=px>w-52?'right':'center';
     c.fillText('peak '+Math.round(pk[1]),px,py-7);c.textAlign='left';
   }
 }
@@ -406,7 +441,7 @@ function sparkline(cv,data,color){
 function computeVerdict(hist){
   const t=hist.t||[],s=hist.surge_score||[];
   const now=lastVal(s);
-  if(now==null)return {head:'—',sub:'gathering data…',color:'#8b949e'};
+  if(now==null)return {head:'—',sub:'gathering data…',color:'#8b86a3'};
   const lvl=levelFor(now),col=LEVEL_COLOR[lvl];
   const past=valueAgo(t,s,20*60);
   const peakHr=maxSince(t,s,60*60);
@@ -443,7 +478,9 @@ function render(j){
   const L=j.latest||{},hist=j.history||{t:[]};
   const now=j.server_time||(Date.now()/1000);
   const sc=L.surge_score,lvl=L.surge_level||levelFor(sc||0);
-  const col=LEVEL_COLOR[lvl]||'#8b949e';
+  const col=LEVEL_COLOR[lvl]||'#8b86a3';
+  // signature: the whole page's top rail tracks the live surge level
+  document.documentElement.style.setProperty('--surge',col);
   // gauge — ease needle + number fluidly to the new target
   document.getElementById('gnum').style.color=col;
   const gl=document.getElementById('glvl');gl.textContent=LEVEL_WORD[lvl]||'';gl.style.color=col;
@@ -464,12 +501,32 @@ function render(j){
   document.title=`${LEVEL_EMOJI[lvl]||'⚪'} ${sc==null?'—':sc} ${LEVEL_WORD[lvl]||''} · Solana surge`;
   setFavicon(col);
   document.querySelector('.hero').classList.toggle('surging',lvl==='SURGE');
+  document.body.classList.toggle('surging',lvl==='SURGE');
   // jito tip floor — display in SOL (API gives lamports)
   const sol=v=>{if(v==null)return '—';const s=v/1e9;
     return s>=0.1?s.toFixed(3):s>=0.001?s.toFixed(5):s.toPrecision(2);};
   const ji=j.jito||{};
   setTxt('jito-p50',sol(ji.p50));setTxt('jito-p75',sol(ji.p75));
   setTxt('jito-p95',sol(ji.p95));setTxt('jito-p99',sol(ji.p99));
+  // RPC failover health — green when on the primary, orange when failed over
+  const rpc=j.rpc||[],rb=document.getElementById('rpcbadge');
+  if(rb){
+    if(!rpc.length){rb.textContent='';rb.className='rpcbadge';}
+    else{
+      const act=rpc.find(e=>e.active)||rpc[0];
+      const nm=act.region||act.endpoint.split('.')[0];
+      // green = the active node IS the primary (cooldown state is irrelevant
+      // here -- `act` is whatever is actually serving traffic)
+      const onPrimary=act.priority===0;
+      rb.className='rpcbadge'+(onPrimary?'':' warn');
+      rb.innerHTML='<span class="dot"></span>'+(onPrimary
+        ?'RPC ('+nm+')'
+        :'RPC failover → ('+nm+')');
+      rb.title=rpc.map(e=>(e.active?'▶ ':'   ')
+        +(e.region?e.region+' — ':'')+e.endpoint
+        +(e.healthy?'':' (cooldown '+e.cooldown_s+'s)')).join('\n');
+    }
+  }
   // verdict
   const v=computeVerdict(hist);
   const vh=document.getElementById('vhead');vh.textContent=v.head;vh.style.color=v.color;
@@ -538,7 +595,7 @@ function render(j){
   const order=['meme_tps','meme_fail_rate','nonvote_tps','fee_contention','fee_p90','pump_launches_min'];
   const dr=document.getElementById('drivers');dr.innerHTML='';
   order.forEach(k=>{const c=comps[k];if(!c)return;
-    const heat=c.heat||0;const hc=heat>=66?'#f85149':heat>=33?'#db6d28':'#3fb950';
+    const heat=c.heat||0;const hc=heat>=66?'#ff4d6d':heat>=33?'#f2a93b':'#14f195';
     dr.innerHTML+=`<div class="driver"><div class="dl">${c.label}</div>
       <div class="dbar"><div class="dfill" style="width:${heat}%;background:${hc}"></div></div>
       <div class="dv">${heat}</div></div>`;
@@ -559,7 +616,7 @@ function render(j){
   const ve=document.getElementById('venues');ve.innerHTML='';
   for(const [name,d] of Object.entries(mp)){
     const fp=(d.fail_rate!=null)?d.fail_rate*100:null;
-    const fc=fp>=70?'#f85149':fp>=40?'#db6d28':'#3fb950';
+    const fc=fp>=70?'#ff4d6d':fp>=40?'#f2a93b':'#14f195';
     ve.innerHTML+=`<div class="venue"><div>${name}</div>
       <div class="vbar"><div class="vfill" style="width:${100*(d.tps||0)/maxT}%"></div></div>
       <div class="vmeta">${fmt(d.tps,'int')} tx/s · <span style="color:${fc}">${fp==null?'—':fp.toFixed(0)+'% fail'}</span></div></div>`;
@@ -568,11 +625,11 @@ function render(j){
   // pump.fun stream health -> folded into the Launches/min card (in details)
   const p=j.pump||{};
   const ue=document.getElementById('u_pump_launches_min');
-  if(ue)ue.innerHTML=p.pump_connected?'pump.fun · <span style="color:#3fb950">live</span>':'pump.fun · connecting…';
+  if(ue)ue.innerHTML=p.pump_connected?'pump.fun · <span style="color:#14f195">live</span>':'pump.fun · connecting…';
   // SOL price (macro context, header)
   const spx=j.sol||{},spEl=document.getElementById('solprice');
   if(spEl){
-    if(spx.price!=null){const c=spx.change_24h,cc=(c==null)?'var(--mut)':c>=0?'#3fb950':'#f85149',ar=(c==null)?'':c>=0?'▲':'▼';
+    if(spx.price!=null){const c=spx.change_24h,cc=(c==null)?'var(--mut)':c>=0?'#14f195':'#ff4d6d',ar=(c==null)?'':c>=0?'▲':'▼';
       spEl.innerHTML=`SOL $${spx.price.toFixed(2)}`+(c==null?'':` <span class="chg" style="color:${cc}">${ar} ${Math.abs(c).toFixed(1)}%</span>`);
     }else spEl.textContent='';
   }
