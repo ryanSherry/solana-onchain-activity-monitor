@@ -239,6 +239,9 @@ const CARDS=[
   {k:'meme_fail_rate',lbl:'DEX failure rate', unit:'',        fmt:'pct', color:'#ff4d6d'},
   {k:'fee_p90',      lbl:'Landing fee (p90)', unit:'µlam/CU', fmt:'int', color:'#f2a93b'},
   {k:'fee_contention',lbl:'Fee contention',   unit:'of slots',fmt:'pct', color:'#b388ff'},
+  {k:'block_fill',   lbl:'Block fill',        unit:'of limit',fmt:'pct', color:'#f2a93b'},
+  {k:'block_fail_rate',lbl:'Network fail rate',unit:'non-vote',fmt:'pct',color:'#ff4d6d'},
+  {k:'block_fee_cu_p90',lbl:'Landed fee (p90)',unit:'µlam/CU',fmt:'int', color:'#14f195'},
   {k:'pump_launches_min',lbl:'Launches / min',unit:'pump.fun',fmt:'int', color:'#b388ff'},
 ];
 function levelFor(v){return v>=TH.SURGE?'SURGE':v>=TH.ELEVATED?'ELEVATED':v>=TH.BUSY?'BUSY':'CALM';}
@@ -630,9 +633,9 @@ function render(j){
 
   // drivers (heat breakdown)
   const comps=j.components||{};
-  const order=['meme_tps','meme_fail_rate','nonvote_tps','fee_contention','fee_p90','pump_launches_min'];
+  const order=['meme_tps','meme_fail_rate','nonvote_tps','block_fill','fee_contention','block_fail_rate','fee_p90','pump_launches_min'];
   const dr=document.getElementById('drivers');dr.innerHTML='';
-  order.forEach(k=>{const c=comps[k];if(!c)return;
+  order.forEach(k=>{const c=comps[k];if(!c||c.present===false)return;
     const heat=c.heat||0;const hc=heat>=66?'#ff4d6d':heat>=33?'#f2a93b':'#14f195';
     dr.innerHTML+=`<div class="driver"><div class="dl">${c.label}</div>
       <div class="dbar"><div class="dfill" style="width:${heat}%;background:${hc}"></div></div>

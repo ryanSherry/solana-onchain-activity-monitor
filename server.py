@@ -38,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY_KEYS = [
     "surge_score", "nonvote_tps", "meme_tps", "meme_fail_rate",
     "fee_p90", "fee_contention", "pump_launches_min", "skip_rate",
+    "block_fill", "block_fail_rate", "block_fee_cu_p90",
 ]
 
 _state = {
@@ -52,12 +53,19 @@ _state = {
     "sol": {},
     "movers": [],
     "rpc": [],                         # RPC pool health (failover status)
+    "block": {},                       # recent-block landing conditions (fill/fail/fee)
     "surge_context": None,             # current surge vs the trailing-week distribution
     "history": deque(maxlen=480),      # fine-grained recent chart (~4h at 30s)
     "history24h": deque(maxlen=6000),  # {t, surge_score} for the 24h chart
 }
 _lock = threading.Lock()
 _pump = None
+
+# Last-known-good recent-block stats (block_fill / block_fail_rate / fee-per-CU).
+# getBlock is heavy (~6 MB), so a dedicated slow loop refreshes this and the fast
+# surge loop injects it into each row. Written by _block_loop, read by the surge
+# loop and snapshot under _lock.
+_block_latest = {}
 
 # Trailing-week surge_score distribution -> "how unusual is right now?" percentile.
 # Touched only by the single surge loop thread (the snapshot reads the derived
@@ -208,6 +216,13 @@ def _surge_loop(rpc, interval, csv_dir):
                     cur_skip = h["skip_rate"]
                 last_health = start
             row["skip_rate"] = cur_skip
+            # inject last-known-good block stats (refreshed by _block_loop) so the
+            # index sees fill / failure / fee-per-CU between the slow block samples
+            with _lock:
+                bl = _block_latest
+            for k in ("block_fill", "block_fail_rate",
+                      "block_fee_cu_p50", "block_fee_cu_p90"):
+                row[k] = bl.get(k)
             score, level, comps = tracker.compute(row)
             row["surge_score"], row["surge_level"] = score, level
 
@@ -269,6 +284,25 @@ def _movers_loop(interval):
         time.sleep(max(1.0, interval - (time.time() - start)))
 
 
+def _block_loop(rpc, interval):
+    """Slow loop: one recent block per `interval` for direct landing conditions
+    (fill / non-vote failure rate / landed fee-per-CU). getBlock is heavy (~6 MB,
+    no gzip), so this runs on its own thread off the surge tick; the surge loop
+    injects the last-known-good into each row. Preserves last value on a miss."""
+    global _block_latest
+    while True:
+        start = time.time()
+        try:
+            b = sources.block_stats(rpc)
+            if b:
+                with _lock:
+                    _block_latest = b
+                    _state["block"] = b
+        except Exception as e:
+            print(f"[warn] block tick failed: {e}")
+        time.sleep(max(2.0, interval - (time.time() - start)))
+
+
 def _snapshot():
     with _lock:
         latest = dict(_state["latest"])
@@ -287,6 +321,7 @@ def _snapshot():
             "sol": _state["sol"],
             "movers": _state["movers"],
             "rpc": _state["rpc"],
+            "block": _state["block"],
             "surge_context": _state["surge_context"],
         }
     # fresh pump rates (continuous between collection ticks)
@@ -339,6 +374,9 @@ def main():
                     help="surge gauge refresh seconds (RPC, HelloMoon)")
     ap.add_argument("--movers-interval", type=int, default=15,
                     help="movers refresh seconds (GeckoTerminal, ~30/min limit)")
+    ap.add_argument("--block-interval", type=int, default=30,
+                    help="recent-block sampling seconds (getBlock is ~6 MB each, "
+                         "so this is a slow loop; 0 disables block-level signals)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8888)
     ap.add_argument("--csv-dir", default=os.path.join(HERE, "data"))
@@ -353,6 +391,9 @@ def main():
                      args=(rpc, args.interval, args.csv_dir), daemon=True).start()
     threading.Thread(target=_movers_loop,
                      args=(args.movers_interval,), daemon=True).start()
+    if args.block_interval > 0:
+        threading.Thread(target=_block_loop,
+                         args=(rpc, args.block_interval), daemon=True).start()
 
     if endpoints == [sources.PUBLIC_RPC]:
         print("WARNING: no SOLANA_RPC configured -- using the public endpoint, "
@@ -363,8 +404,8 @@ def main():
     print(f"dashboard: http://{args.host}:{args.port}")
     print(f"RPC pool ({len(endpoints)}): "
           f"{', '.join(sources._node_label(e) for e in endpoints)}")
-    print(f"surge every {args.interval}s · movers every {args.movers_interval}s "
-          f"— open the URL in a browser")
+    print(f"surge every {args.interval}s · movers every {args.movers_interval}s · "
+          f"block every {args.block_interval}s — open the URL in a browser")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

@@ -45,6 +45,7 @@ CSV_FIELDS = [
     "timestamp_utc", "nonvote_tps", "total_tps", "skip_rate",
     "fee_p50", "fee_p90", "fee_p99", "fee_hot_p90", "fee_contention",
     "meme_tps", "meme_fail_rate",
+    "block_fill", "block_fail_rate", "block_fee_cu_p50", "block_fee_cu_p90",
     "pump_launches_min", "pump_graduations_min",
     "new_pools_5m", "surge_score", "surge_level",
     "top_mover", "top_mover_vol_h1",
@@ -69,7 +70,9 @@ SURGE_SIGNALS = [
     ("meme_tps",           25, 1200.0),      # meme-venue submission load
     ("meme_fail_rate",     20, 0.45),        # bots racing and losing = the flood
     ("nonvote_tps",        20, 1400.0),      # overall network load
+    ("block_fill",         15, 0.55),        # block compute utilization (direct congestion)
     ("fee_contention",     15, 0.10),        # how often there's competition to land
+    ("block_fail_rate",    12, 0.20),        # network-wide non-vote tx failure rate
     ("fee_p90",            12, 3_000_000.0), # how expensive landing has become
     ("pump_launches_min",   8, 20.0),        # leading edge of a meme frenzy
 ]
@@ -79,7 +82,9 @@ SIGNAL_LABELS = {
     "meme_tps": "DEX trade rate",
     "meme_fail_rate": "DEX failure rate",
     "nonvote_tps": "Network TPS",
+    "block_fill": "Block fill",
     "fee_contention": "Fee contention",
+    "block_fail_rate": "Network fail rate",
     "fee_p90": "Landing fee",
     "pump_launches_min": "Launch rate",
 }
@@ -125,18 +130,24 @@ class SurgeTracker:
         acc = wsum = 0.0
         comps = {}
         for key, weight, seed in SURGE_SIGNALS:
+            val = row.get(key)
+            present = val is not None and val != ""
             base = self.baseline(key, seed)
-            heat = _heat(row.get(key), base)
+            heat = _heat(val, base)
             comps[key] = {
                 "label": SIGNAL_LABELS.get(key, key),
                 "heat": round(heat),
                 "weight": weight,
                 "contribution": round(weight * heat / 100.0, 1),
-                "value": row.get(key),
+                "value": val,
                 "baseline": round(base, 3) if base is not None else None,
+                "present": present,
             }
-            acc += weight * heat
-            wsum += weight
+            # a missing signal (e.g. block stats before the first sample, or a
+            # failed fetch) must NOT vote -- otherwise it dilutes the index to 0.
+            if present:
+                acc += weight * heat
+                wsum += weight
         index = int(round(acc / wsum)) if wsum else 0
         return index, level_for(index), comps
 
@@ -245,18 +256,31 @@ def render(row, movers, warming, pump_connected=False, meme_by_program=None, com
 
 
 def append_csv(path, row):
-    new = not os.path.exists(path)
+    exists = os.path.exists(path) and os.path.getsize(path) > 0
+    if exists:
+        with open(path, newline="") as f:
+            header = f.readline().rstrip("\r\n").split(",")
+        if header != CSV_FIELDS:
+            # schema changed since this file was started (e.g. new columns) ->
+            # migrate in place so old + new rows stay column-aligned
+            with open(path, newline="") as f:
+                old = list(csv.DictReader(f))
+            with open(path, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                w.writeheader()
+                w.writerows({k: r.get(k) for k in CSV_FIELDS} for r in old)
     with open(path, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-        if new:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
+        if not exists:
             w.writeheader()
-        w.writerow(row)
+        w.writerow({k: row.get(k) for k in CSV_FIELDS})
 
 
 _NUMERIC_KEYS = (
     "nonvote_tps", "total_tps", "skip_rate", "fee_p50", "fee_p90", "fee_p99",
     "fee_contention", "meme_tps", "meme_fail_rate", "pump_launches_min",
     "pump_graduations_min", "new_pools_5m", "surge_score",
+    "block_fill", "block_fail_rate", "block_fee_cu_p50", "block_fee_cu_p90",
 )
 
 
