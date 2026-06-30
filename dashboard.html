@@ -85,6 +85,12 @@
   .vsub{font-size:14px;color:var(--mut);margin-top:8px;line-height:1.5}
   .vdrivers{font-size:13px;color:var(--tx);margin-top:10px;line-height:1.55}
   .vdrivers .lbl{color:var(--mut)}
+  .vctx{font-size:12px;color:var(--mut);margin-top:11px;line-height:1.5}
+  .vctx b{font-family:var(--mono);font-weight:700}
+  .jrec{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;
+    font-size:12px;color:var(--mut);margin:0 0 14px}
+  .jrec b{font-family:var(--mono);font-size:21px;font-weight:700;line-height:1}
+  .jrec .tag{font-size:11px;color:var(--mut)}
   #hero-chart{width:100%;height:150px;display:block;margin-top:20px}
   #hero-chart-24h{width:100%;height:118px;display:block;margin-top:16px}
   .chart-cap{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-top:4px}
@@ -175,6 +181,7 @@
         <div class="vhead" id="vhead">—</div>
         <div class="vsub" id="vsub">gathering data…</div>
         <div class="vdrivers" id="vdrivers"></div>
+        <div class="vctx" id="vctx"></div>
       </div>
     </div>
     <canvas id="hero-chart"></canvas>
@@ -186,6 +193,7 @@
   <!-- JITO LANDING MARKET -->
   <div class="panel">
     <h2 class="h2row"><span>Jito bundle tip floor <span class="info hdr" data-tip="The tip amounts in SOL needed to land a Jito bundle right now, by percentile. Higher = more competition for blockspace, so landing is getting more expensive.">?</span></span></h2>
+    <div class="jrec" id="jrec"></div>
     <div class="jito-row">
       <div class="jstat"><div class="jl">Median · p50</div><div class="jv"><span id="jito-p50">—</span><span class="ju">SOL</span></div></div>
       <div class="jstat"><div class="jl">Competitive · p75</div><div class="jv"><span id="jito-p75">—</span><span class="ju">SOL</span></div></div>
@@ -508,6 +516,16 @@ function render(j){
   const ji=j.jito||{};
   setTxt('jito-p50',sol(ji.p50));setTxt('jito-p75',sol(ji.p75));
   setTxt('jito-p95',sol(ji.p95));setTxt('jito-p99',sol(ji.p99));
+  // "tip to land now": recommend a tip percentile scaled to current congestion
+  const TIP_REC={CALM:['p50','median · calm'],BUSY:['p75','competitive'],
+    ELEVATED:['p95','high contention'],SURGE:['p99','top — surging']};
+  const [tpk,tlab]=TIP_REC[lvl]||TIP_REC.CALM, jr=document.getElementById('jrec');
+  if(jr){const tv=ji[tpk];
+    jr.innerHTML=(tv==null)
+      ? '<span class="tag">tip floor unavailable</span>'
+      : `<span>To land a bundle now</span> <b style="color:${col}">${sol(tv)} SOL</b>`
+        +` <span class="tag">${tpk} · ${tlab}</span>`;
+  }
   // RPC failover health — green when on the primary, orange when failed over
   const rpc=j.rpc||[],rb=document.getElementById('rpcbadge');
   if(rb){
@@ -531,6 +549,17 @@ function render(j){
   const v=computeVerdict(hist);
   const vh=document.getElementById('vhead');vh.textContent=v.head;vh.style.color=v.color;
   document.getElementById('vsub').textContent=v.sub;
+  // how unusual is right now vs the trailing-week distribution
+  const ctx=j.surge_context, vc=document.getElementById('vctx');
+  if(vc){
+    if(!ctx){vc.textContent='';}
+    else{
+      const span=ctx.hours>=48?Math.round(ctx.hours/24)+'d':ctx.hours+'h';
+      vc.innerHTML=`Right now is higher than <b style="color:${col}">${ctx.percentile}%</b>`
+        +` of the past ${span} <span style="color:var(--mut)">· typical ${Math.round(ctx.p50)}`
+        +` · peak ${Math.round(ctx.max)}</span>`;
+    }
+  }
   // what's driving the surge: signals elevated above baseline + busiest venues
   const drv=Object.values(j.components||{}).filter(c=>c&&c.heat>=25)
     .sort((a,b)=>b.contribution-a.contribution).slice(0,3).map(c=>c.label);
