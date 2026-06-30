@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solana on-chain activity</title>
+<style>
+  :root{
+    --bg:#0b0e14; --card:#141a23; --line:#222c3a; --tx:#e6edf3; --mut:#8b949e;
+    --green:#3fb950; --blue:#58a6ff; --orange:#db6d28; --red:#f85149; --purple:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;justify-content:space-between;
+    padding:16px 24px;border-bottom:1px solid var(--line)}
+  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.2px;color:var(--mut)}
+  header .meta{font-size:12px;color:var(--mut);text-align:right}
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--green);justify-content:flex-end}
+  .live.off{color:var(--mut)}
+  .live .pulse{width:8px;height:8px;border-radius:50%;background:currentColor}
+  .live:not(.off) .pulse{animation:pulse 1.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.5)}70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+  .fresh{font-size:11px;color:var(--mut);font-weight:400;letter-spacing:0;text-transform:none;white-space:nowrap}
+  .solprice{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap}
+  .solprice .chg{margin-left:5px;font-weight:600}
+  .surge-live-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+  .refresh-bar{height:2px;width:64px;border-radius:2px;background:var(--green);transform-origin:left;transform:scaleX(0)}
+  .hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
+  .h2row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+  .jito-row{display:flex;gap:14px;flex-wrap:wrap}
+  .jstat{flex:1;min-width:130px;background:#0f141c;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .jstat .jl{font-size:11px;color:var(--mut);margin-bottom:4px}
+  .jstat .jv{font-size:22px;font-weight:700}
+  .jstat .ju{font-size:11px;color:var(--mut);font-weight:400;margin-left:3px}
+  .hero.surging{animation:surgeGlow 1.8s ease-in-out infinite}
+  @keyframes surgeGlow{0%,100%{box-shadow:0 0 0 1px rgba(248,81,73,0)}50%{box-shadow:0 0 26px 1px rgba(248,81,73,.45)}}
+  .wrap{padding:22px;max-width:1100px;margin:0 auto}
+
+  /* ---- hero surge meter ---- */
+  .hero{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:22px 26px 26px;margin-bottom:20px}
+  .kicker{font-size:13px;font-weight:700;letter-spacing:1.4px;color:var(--tx)}
+  .subtitle{font-size:13px;color:var(--mut);margin-top:3px;max-width:640px}
+  .hero-body{display:flex;gap:30px;align-items:center;margin-top:14px;flex-wrap:wrap}
+  .gauge-wrap{position:relative;width:300px;flex:none}
+  .gauge-wrap canvas{width:300px;height:165px;display:block}
+  .gauge-center{position:absolute;left:0;right:0;bottom:48px;text-align:center;pointer-events:none}
+  .g-num{font-size:46px;font-weight:800;line-height:.9;transform-origin:center;transition:color .5s ease}
+  @keyframes gpulse{0%{transform:scale(1)}35%{transform:scale(1.13)}100%{transform:scale(1)}}
+  .gpulse{animation:gpulse .55s ease}
+  .g-lvl{font-size:13px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-top:1px}
+  .zones{display:flex;justify-content:space-between;margin-top:14px;font-size:11px;
+    font-weight:600;letter-spacing:.3px}
+  .zones span{flex:1;text-align:center}
+  .verdict{flex:1;min-width:260px}
+  .vq{font-size:13px;color:var(--mut);margin-bottom:6px}
+  .vhead{font-size:30px;font-weight:800;line-height:1.05;letter-spacing:.2px}
+  .vsub{font-size:14px;color:var(--mut);margin-top:8px;line-height:1.5}
+  .vdrivers{font-size:13px;color:var(--tx);margin-top:10px;line-height:1.55}
+  .vdrivers .lbl{color:var(--mut)}
+  #hero-chart{width:100%;height:150px;display:block;margin-top:20px}
+  #hero-chart-24h{width:100%;height:118px;display:block;margin-top:16px}
+  .chart-cap{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-top:4px}
+  .info{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;
+    border:1px solid var(--mut);color:var(--mut);font-size:9px;cursor:help;position:relative;vertical-align:middle}
+  .info:hover::after{content:attr(data-tip);position:absolute;bottom:155%;right:-4px;width:235px;
+    background:#0c1118;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:11px;font-weight:400;
+    color:var(--tx);letter-spacing:0;text-transform:none;line-height:1.45;z-index:20;text-align:left;
+    white-space:normal;box-shadow:0 6px 18px rgba(0,0,0,.55)}
+  .info.hdr:hover::after{right:auto;left:-2px}
+  .info.tdown:hover::after{bottom:auto;top:165%}
+
+  /* ---- panels ---- */
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 20px;margin-bottom:20px}
+  .panel h2{font-size:13px;color:var(--tx);font-weight:700;margin:0 0 4px;letter-spacing:.4px}
+  .panel .h2sub{font-size:12px;color:var(--mut);margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  th,td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  th:first-child,td:first-child{text-align:center;color:var(--mut);width:28px}
+  td.sym{text-align:left;font-weight:700}
+  td.sym a{color:var(--tx);text-decoration:none}
+  td.sym a:hover{color:var(--blue)}
+  .up{color:var(--green)} .down{color:var(--red)}
+  .hot{color:var(--orange);font-weight:700}
+  #movers tr{transition:opacity .5s ease}
+
+  /* ---- details ---- */
+  details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:0;margin-bottom:20px}
+  summary{cursor:pointer;padding:16px 20px;font-size:13px;font-weight:600;color:var(--mut);
+    list-style:none;user-select:none;position:relative}
+  .det-live{position:absolute;right:18px;top:13px;display:none}
+  details[open] .det-live{display:inline-flex}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ ";color:var(--mut)}
+  details[open] summary::before{content:"▾ "}
+  .details-body{padding:4px 20px 20px}
+  .drivers{margin-bottom:18px}
+  .driver{display:grid;grid-template-columns:130px 1fr 46px;align-items:center;gap:10px;margin:7px 0}
+  .driver .dl{font-size:12px;color:var(--mut)}
+  .driver .dbar{height:12px;background:#0c1118;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+  .driver .dfill{height:100%;border-radius:6px;transition:width .4s}
+  .driver .dv{font-size:11px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+  .mcard{background:#0f141c;border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .mcard .lbl{font-size:11px;color:var(--mut);margin-bottom:3px}
+  .mcard .val{font-size:22px;font-weight:600}
+  .mcard .val small{font-size:11px;color:var(--mut);font-weight:400;margin-left:4px}
+  .mcard canvas{width:100%;height:36px;display:block;margin-top:6px}
+  .venue{display:grid;grid-template-columns:78px 1fr 130px;align-items:center;gap:12px;margin:8px 0}
+  .venue .vbar{height:16px;background:#0c1118;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+  .venue .vfill{height:100%;background:var(--blue);border-radius:5px}
+  .venue .vmeta{font-size:12px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<header>
+  <h1>SOLANA ON-CHAIN ACTIVITY</h1>
+  <div class="meta">
+    <div class="solprice" id="solprice"></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- HERO SURGE METER -->
+  <section class="hero">
+    <div class="hero-top">
+      <div class="kicker">NETWORK SURGE LEVEL <span class="info hdr tdown" data-tip="How busy &amp; congested Solana is right now. When this climbs, meme-coin trading floods the network — transactions get expensive to land and our lander's rate limits get tested.">?</span></div>
+      <div class="surge-live-wrap">
+        <div class="live off" id="surge-live"><span class="pulse"></span><span id="surge-live-txt">live</span></div>
+        <div class="refresh-bar" id="refresh-bar"></div>
+      </div>
+    </div>
+    <div class="hero-body">
+      <div class="gauge-wrap">
+        <canvas id="gauge"></canvas>
+        <div class="gauge-center"><div class="g-num" id="gnum">—</div><div class="g-lvl" id="glvl">—</div></div>
+        <div class="zones">
+          <span style="color:var(--green)">Calm</span>
+          <span style="color:var(--blue)">Busy</span>
+          <span style="color:var(--orange)">Elevated</span>
+          <span style="color:var(--red)">Surging</span>
+        </div>
+      </div>
+      <div class="verdict">
+        <div class="vhead" id="vhead">—</div>
+        <div class="vsub" id="vsub">gathering data…</div>
+        <div class="vdrivers" id="vdrivers"></div>
+      </div>
+    </div>
+    <canvas id="hero-chart"></canvas>
+    <div class="chart-cap"><span id="chart-label">Recent</span><span id="chart-span"></span></div>
+    <canvas id="hero-chart-24h"></canvas>
+    <div class="chart-cap"><span>Last 24 hours</span><span id="chart-span-24"></span></div>
+  </section>
+
+  <!-- JITO LANDING MARKET -->
+  <div class="panel">
+    <h2 class="h2row"><span>Jito bundle tip floor <span class="info hdr" data-tip="The tip amounts in SOL needed to land a Jito bundle right now, by percentile. Higher = more competition for blockspace, so landing is getting more expensive.">?</span></span></h2>
+    <div class="jito-row">
+      <div class="jstat"><div class="jl">Median · p50</div><div class="jv"><span id="jito-p50">—</span><span class="ju">SOL</span></div></div>
+      <div class="jstat"><div class="jl">Competitive · p75</div><div class="jv"><span id="jito-p75">—</span><span class="ju">SOL</span></div></div>
+      <div class="jstat"><div class="jl">High · p95</div><div class="jv"><span id="jito-p95">—</span><span class="ju">SOL</span></div></div>
+      <div class="jstat"><div class="jl">Top · p99</div><div class="jv"><span id="jito-p99">—</span><span class="ju">SOL</span></div></div>
+    </div>
+  </div>
+
+  <!-- TOP MOVERS -->
+  <div class="panel">
+    <h2 class="h2row"><span>Surging meme coins <span class="info hdr" data-tip="Meme coins whose trading is actually straining the network right now — real upward surges, not low-cap tokens ticking up. Surge (0–5) is driven by trading volume + transaction count (the load that hits the lander) plus upward momentum. Coins fade out over ~a minute once they cool; an empty list means nothing's surging (a calm network). Age = fresh launch vs established.">?</span></span><span class="fresh" id="movers-fresh">—</span></h2>
+    <table>
+      <thead><tr>
+        <th>#</th><th class="sym" style="text-align:left">Token</th>
+        <th>Age <span class="info" data-tip="How long ago this coin's pool was created. Green = under an hour old, blue = hours, gray = over a week. A brand-new coin surging is a fresh launch; an old coin surging is established money moving.">?</span></th>
+        <th>Price</th><th>Market cap</th><th>5m</th><th>1h</th><th>Vol 1h</th>
+        <th>Surge <span class="info" data-tip="How much this coin is straining the network with a real upward pump (0–5): driven by its 1h trading volume + 5m trade count (the load that hits the lander), blended with upward momentum. Low-volume / micro-cap tokens don't qualify no matter the price move. Coins fade out over ~a minute once they cool. Hover a value for the exact figures.">?</span></th>
+      </tr></thead>
+      <tbody id="movers"></tbody>
+    </table>
+  </div>
+
+  <!-- TECHNICAL DETAILS (collapsed) -->
+  <details>
+    <summary>Technical details — what's driving the number<span class="det-live live off" id="det-live"><span class="pulse"></span><span id="det-live-txt">live</span></span></summary>
+    <div class="details-body">
+      <div class="drivers" id="drivers"></div>
+      <div class="grid" id="cards"></div>
+      <h2 style="font-size:12px;color:var(--mut);margin:6px 0 10px;text-transform:uppercase;letter-spacing:.5px">DEX venue trade &amp; failure rate (top 9 by tx volume)</h2>
+      <div id="venues"></div>
+    </div>
+  </details>
+</div>
+
+<script>
+const TH={SURGE:60,ELEVATED:38,BUSY:18,CALM:0};
+const LEVEL_COLOR={CALM:'#3fb950',BUSY:'#58a6ff',ELEVATED:'#db6d28',SURGE:'#f85149'};
+const LEVEL_WORD={CALM:'Calm',BUSY:'Busy',ELEVATED:'Elevated',SURGE:'Surging'};
+const CARDS=[
+  {k:'nonvote_tps',  lbl:'Network TPS',       unit:'tx/s',    fmt:'int', color:'#58a6ff'},
+  {k:'skip_rate',    lbl:'Slot skip rate',    unit:'of slots', fmt:'pct1',color:'#d29922'},
+  {k:'meme_tps',     lbl:'DEX trade rate',    unit:'tx/s',    fmt:'int', color:'#3fb950'},
+  {k:'meme_fail_rate',lbl:'DEX failure rate', unit:'',        fmt:'pct', color:'#f85149'},
+  {k:'fee_p90',      lbl:'Landing fee (p90)', unit:'µlam/CU', fmt:'int', color:'#db6d28'},
+  {k:'fee_contention',lbl:'Fee contention',   unit:'of slots',fmt:'pct', color:'#bc8cff'},
+  {k:'pump_launches_min',lbl:'Launches / min',unit:'pump.fun',fmt:'int', color:'#bc8cff'},
+];
+function levelFor(v){return v>=TH.SURGE?'SURGE':v>=TH.ELEVATED?'ELEVATED':v>=TH.BUSY?'BUSY':'CALM';}
+const LEVEL_EMOJI={CALM:'🟢',BUSY:'🔵',ELEVATED:'🟠',SURGE:'🔴'};
+let _favColor=null;
+function setFavicon(color){
+  if(color===_favColor)return;_favColor=color;
+  const c=document.createElement('canvas');c.width=c.height=32;
+  const x=c.getContext('2d');x.fillStyle=color;x.beginPath();x.arc(16,16,13,0,7);x.fill();
+  let l=document.querySelector('link[rel="icon"]');
+  if(!l){l=document.createElement('link');l.rel='icon';document.head.appendChild(l);}
+  l.href=c.toDataURL('image/png');
+}
+
+let lastInterval=20, moversInterval=15;
+let lastUpdatedAt=null, lastSurge=null;
+let surgeMem={}, lastMoversUpdate=null;
+let freshRef={surge:{age:0,t:0},movers:{age:0,t:0}};
+function setTxt(id,t){const e=document.getElementById(id);if(e)e.textContent=t;}
+function agoStr(s){s=Math.max(0,s);if(s<2)return 'just now';if(s<60)return Math.round(s)+'s ago';return Math.round(s/60)+'m ago';}
+// freshness heartbeat: green when fresh, warming to red as it ages toward the
+// next refresh, then back to green when new data lands
+function freshColor(age,cadence){const r=age/(cadence||15);
+  return r<0.45?'#3fb950':r<0.8?'#d29922':r<1.4?'#db6d28':'#f85149';}
+function updateFresh(){const n=Date.now();
+  const su=freshRef.surge.age+(n-freshRef.surge.t)/1000;
+  const el=document.getElementById('surge-live');
+  if(el){if(su<15){el.classList.remove('off');setTxt('surge-live-txt','live · '+lastInterval+'s');}
+    else{el.classList.add('off');setTxt('surge-live-txt','stalled · '+agoStr(su));}}
+  // refresh countdown bar: same green->amber->orange->red aging as the others
+  const rb=document.getElementById('refresh-bar');
+  if(rb)rb.style.background=freshColor(su,lastInterval);
+  // technical-details indicator (shown only when expanded): live if fresh,
+  // else the color-aging "updated Xs ago"
+  const dl=document.getElementById('det-live');
+  if(dl){if(su<=lastInterval+2){dl.classList.remove('off');dl.style.color='';setTxt('det-live-txt','live · '+lastInterval+'s');}
+    else{dl.classList.add('off');dl.style.color=freshColor(su,15);setTxt('det-live-txt','updated '+agoStr(su));}}
+  const mvAge=freshRef.movers.age+(n-freshRef.movers.t)/1000;
+  const mel=document.getElementById('movers-fresh');
+  if(mel){mel.textContent='updated '+agoStr(mvAge);mel.style.color=freshColor(mvAge,moversInterval);}
+}
+setInterval(updateFresh,1000);
+function ageCell(created,now){
+  if(!created)return '<td>—</td>';
+  const s=now-created;let lab,col;
+  if(s<3600){lab=Math.max(1,Math.round(s/60))+'m';col='#3fb950';}        // <1h: green
+  else if(s<86400){lab=(s/3600).toFixed(s<36000?1:0).replace('.0','')+'h';col='#58a6ff';} // hours: blue
+  else if(s<7*86400){lab=Math.round(s/86400)+'d';col='var(--tx)';}        // days: normal
+  else{lab=Math.round(s/86400)+'d';col='var(--mut)';}                     // >1wk: gray
+  return `<td style="color:${col};font-weight:600">${lab}</td>`;
+}
+
+function fmt(v,kind){
+  if(v===null||v===undefined||Number.isNaN(v))return '—';
+  if(kind==='pct')return (v*100).toFixed(0)+'%';
+  if(kind==='pct1')return (v*100).toFixed(2).replace(/\.?0+$/,'')+'%';
+  if(kind==='int'){const n=Math.round(v);
+    if(Math.abs(n)>=1e6)return (n/1e6).toFixed(2)+'M';
+    if(Math.abs(n)>=1e3)return (n/1e3).toFixed(1)+'k';
+    return n.toLocaleString();}
+  return v;
+}
+function usd(v){if(v===null||v===undefined)return '—';
+  for(const [d,s] of [[1e9,'B'],[1e6,'M'],[1e3,'K']])if(Math.abs(v)>=d)return '$'+(v/d).toFixed(1)+s;
+  return '$'+(v).toFixed(0);}
+function price(v){if(v===null||v===undefined)return '—';
+  if(v>=1)return '$'+v.toFixed(2); if(v>=0.0001)return '$'+v.toFixed(5); return '$'+v.toExponential(2);}
+function pctCell(v){if(v===null||v===undefined)return '<td>—</td>';
+  const c=v>=0?'up':'down';return `<td class="${c}">${v>=0?'+':''}${v.toFixed(0)}%</td>`;}
+/* Upward Surge 0-10: gated to coins rising RIGHT NOW (5m up), then sized by
+   sustained 1h gain (60%) + turnover/realness (40%). Dumping/flat coins show ↓. */
+// A "surge" must MOVE THE NEEDLE — strain the network with real trading volume,
+// not just a low-cap token ticking up. KEY LEARNING (calibrated against live
+// data): the real surges are usually LOW market cap explosions, so MC is the
+// wrong filter — VOLUME + TRANSACTION COUNT is what separates a real surge from
+// a rug-tick. Score is gated to genuine upward pumps, then sized by network
+// strain (volume + tx count) blended with momentum. All thresholds tunable:
+const SURGE_VOL_FLOOR=75000;     // 1h volume floor — the real filter (not MC)
+const SURGE_VOL_FULL=2000000;    // 1h volume that earns a full strain score
+const SURGE_TX_FLOOR=30;         // 5m trade-count floor
+const SURGE_TX_FULL=300;         // 5m trade count for full strain score
+const SURGE_MOM_MIN=5;           // min 1h % gain to count as surging
+const SURGE_MOM_FULL=75;         // 1h % gain for full momentum
+const SURGE_MC_FLOOR=50000;      // only to drop total dust
+const SURGE_CRASH_5M=-10;        // exclude if dropping more than this in 5m
+const SURGE_DECAY=1.3;           // score points shed per 15s tick once it stops surging
+function surgeScore(m){
+  const h1=m.chg_h1, m5=m.chg_m5, vol=m.vol_h1, mc=m.mc, tx=m.txns_5m;
+  if(h1==null||h1<SURGE_MOM_MIN)return 0;              // must be meaningfully up
+  if(m5!=null&&m5<=SURGE_CRASH_5M)return 0;            // not actively crashing
+  if(vol==null||vol<SURGE_VOL_FLOOR)return 0;          // real trading volume (the real filter)
+  if(mc!=null&&mc<SURGE_MC_FLOOR)return 0;             // drop total dust
+  const lg=(x,a,b)=>Math.min(1,Math.max(0,Math.log10(x/a)/Math.log10(b/a)));
+  const volN=lg(vol,SURGE_VOL_FLOOR,SURGE_VOL_FULL);
+  const txN=Math.min(1,Math.max(0,((tx||0)-SURGE_TX_FLOOR)/(SURGE_TX_FULL-SURGE_TX_FLOOR)));
+  const momN=Math.min(1,h1/SURGE_MOM_FULL);
+  return Math.max(1,Math.round((0.40*volN+0.35*txN+0.25*momN)*5));
+}
+function surgeBar(sc,m){
+  if(sc<=0)return '<td>—</td>';
+  const col=sc>=4?'#f85149':sc>=2?'#db6d28':'#d29922';
+  return `<td title="surging +${(m.chg_h1||0).toFixed(0)}% 1h · ${usd(m.vol_h1)} of 1h volume · ${m.txns_5m||0} trades/5m (MC ${usd(m.mc)})">`+
+    `<div style="display:flex;align-items:center;gap:7px;justify-content:flex-end">`+
+    `<div style="flex:0 0 40px;height:7px;background:#0c1118;border:1px solid var(--line);border-radius:4px;overflow:hidden">`+
+    `<div style="height:100%;width:${sc*20}%;background:${col}"></div></div>`+
+    `<span style="color:${col};font-weight:700;min-width:24px">${sc}/5</span></div></td>`;}
+
+/* ---- history helpers ---- */
+function lastVal(a){for(let i=a.length-1;i>=0;i--)if(a[i]!=null)return a[i];return null;}
+function valueAgo(t,s,secs){if(!t.length)return null;const now=t[t.length-1];const tgt=now-secs;
+  let best=null,bd=1e18;for(let i=0;i<t.length;i++){if(s[i]==null)continue;const d=Math.abs(t[i]-tgt);
+    if(t[i]<=now-secs*0.5&&d<bd){bd=d;best=s[i];}}return best;}
+function maxSince(t,s,secs){if(!t.length)return null;const now=t[t.length-1];let m=null;
+  for(let i=0;i<t.length;i++){if(s[i]==null)continue;if(t[i]>=now-secs)m=(m==null)?s[i]:Math.max(m,s[i]);}return m;}
+
+/* ---- gauge ---- */
+function drawGauge(cv,value,level){
+  const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);
+  const cx=w/2,cy=h*0.97,r=Math.min(w/2,h)*0.9,lw=Math.max(15,r*0.17);
+  const A=v=>Math.PI+(Math.max(0,Math.min(100,v))/100)*Math.PI;
+  const zones=[[0,18,'#3fb950'],[18,38,'#58a6ff'],[38,60,'#db6d28'],[60,100,'#f85149']];
+  c.lineWidth=lw;c.lineCap='butt';
+  zones.forEach(([a,b,col])=>{c.beginPath();c.strokeStyle=col;c.globalAlpha=.32;c.arc(cx,cy,r,A(a),A(b));c.stroke();});
+  c.globalAlpha=1;
+  // active fill up to value
+  c.beginPath();c.strokeStyle=LEVEL_COLOR[level]||'#888';c.lineWidth=lw;c.arc(cx,cy,r,A(0),A(value));c.stroke();
+  // needle
+  const ang=A(value);
+  c.beginPath();c.moveTo(cx,cy);c.lineTo(cx+Math.cos(ang)*(r*0.98),cy+Math.sin(ang)*(r*0.98));
+  c.lineWidth=2.5;c.strokeStyle='#e6edf3';c.stroke();
+  c.beginPath();c.arc(cx,cy,5,0,7);c.fillStyle='#e6edf3';c.fill();
+}
+
+/* ---- hero trend chart (surge level 0-100 over a TIME axis) ----
+   domain=[t0,t1] epoch secs fixes the x-axis window; points outside it are
+   simply absent (=> empty space for time we haven't collected yet). */
+function fmtClock(t){return new Date(t*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
+function drawHero(cv,times,vals,level,domain,opts){
+  const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);
+  const padL=4,padR=6,padT=6,padB=20,W=w-padL-padR,H=h-padT-padB;
+  let t0,t1;
+  if(domain){t0=domain[0];t1=domain[1];}
+  else if(times&&times.length){t0=times[0];t1=times[times.length-1];}
+  else{t0=0;t1=1;}
+  if(t1<=t0)t1=t0+1;
+  const X=t=>padL+W*((t-t0)/(t1-t0));
+  const Y=v=>padT+H*(1-v/100);
+  // x-axis baseline + time ticks
+  c.strokeStyle='#222c3a';c.lineWidth=1;c.beginPath();c.moveTo(padL,padT+H);c.lineTo(w-padR,padT+H);c.stroke();
+  const K=4;c.font='10px sans-serif';
+  for(let i=0;i<=K;i++){
+    const tt=t0+(t1-t0)*i/K,x=X(tt);
+    c.globalAlpha=.5;c.strokeStyle='#1b2430';c.beginPath();c.moveTo(x,padT);c.lineTo(x,padT+H);c.stroke();c.globalAlpha=1;
+    c.fillStyle='#6e7681';c.textAlign=i===0?'left':i===K?'right':'center';
+    c.fillText(fmtClock(tt),x,h-6);
+  }
+  c.textAlign='left';
+  // threshold lines
+  [[TH.ELEVATED,'#db6d28','Elevated'],[TH.SURGE,'#f85149','Surging']].forEach(([v,col,lab])=>{
+    c.strokeStyle=col;c.globalAlpha=.32;c.setLineDash([4,4]);c.beginPath();c.moveTo(padL,Y(v));c.lineTo(w-padR,Y(v));c.stroke();
+    c.setLineDash([]);c.globalAlpha=.6;c.fillStyle=col;c.fillText(lab,padL+2,Y(v)-3);c.globalAlpha=1;
+  });
+  // data (plotted by actual time)
+  const pts=[];for(let i=0;i<times.length;i++)if(vals[i]!=null&&times[i]>=t0&&times[i]<=t1)pts.push([times[i],vals[i]]);
+  if(pts.length<2)return;
+  const col=LEVEL_COLOR[level]||'#58a6ff';
+  // area
+  c.beginPath();c.moveTo(X(pts[0][0]),Y(pts[0][1]));
+  for(const[t,v]of pts)c.lineTo(X(t),Y(v));
+  c.lineTo(X(pts[pts.length-1][0]),padT+H);c.lineTo(X(pts[0][0]),padT+H);c.closePath();c.fillStyle=col+'1f';c.fill();
+  // line
+  c.beginPath();c.moveTo(X(pts[0][0]),Y(pts[0][1]));
+  for(const[t,v]of pts)c.lineTo(X(t),Y(v));
+  c.strokeStyle=col;c.lineWidth=2;c.lineJoin='round';c.stroke();
+  // last dot
+  const lp=pts[pts.length-1];c.beginPath();c.arc(X(lp[0]),Y(lp[1]),3,0,7);c.fillStyle=col;c.fill();
+  // peak marker (24h chart)
+  if(opts&&opts.markPeak){
+    let pk=pts[0];for(const p of pts)if(p[1]>pk[1])pk=p;
+    const px=X(pk[0]),py=Y(pk[1]);
+    c.beginPath();c.arc(px,py,3.5,0,7);c.lineWidth=1.5;c.strokeStyle='#e6edf3';c.stroke();
+    c.fillStyle='#e6edf3';c.font='10px sans-serif';c.textAlign=px>w-52?'right':'center';
+    c.fillText('peak '+Math.round(pk[1]),px,py-7);c.textAlign='left';
+  }
+}
+function sparkline(cv,data,color){
+  const dpr=devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);
+  const pts=data.map(v=>(v==null||Number.isNaN(v))?null:v),vals=pts.filter(v=>v!=null);
+  if(vals.length<2)return;let mn=Math.min(...vals),mx=Math.max(...vals);if(mn===mx){mn-=1;mx+=1;}
+  const p=3,X=i=>p+(w-2*p)*(i/(pts.length-1)),Y=v=>h-p-(h-2*p)*((v-mn)/(mx-mn));
+  c.beginPath();let st=false;pts.forEach((v,i)=>{if(v==null)return;if(!st){c.moveTo(X(i),Y(v));st=true;}else c.lineTo(X(i),Y(v));});
+  c.strokeStyle=color;c.lineWidth=1.6;c.lineJoin='round';c.stroke();
+  const li=pts.length-1;if(pts[li]!=null){c.beginPath();c.arc(X(li),Y(pts[li]),2.2,0,7);c.fillStyle=color;c.fill();}
+}
+
+/* ---- verdict ---- */
+function computeVerdict(hist){
+  const t=hist.t||[],s=hist.surge_score||[];
+  const now=lastVal(s);
+  if(now==null)return {head:'—',sub:'gathering data…',color:'#8b949e'};
+  const lvl=levelFor(now),col=LEVEL_COLOR[lvl];
+  const past=valueAgo(t,s,20*60);
+  const peakHr=maxSince(t,s,60*60);
+  const delta=(past!=null)?Math.round(now-past):null;
+  let head,sub;
+  const trend=delta==null?'':(delta>5?`up ${delta} pts vs 20 min ago`:delta<-5?`down ${-delta} pts vs 20 min ago`:'about flat vs 20 min ago');
+  const peakTxt=(peakHr!=null)?` · peaked at ${peakHr} this hour`:'';
+  if(now>=TH.SURGE){
+    head=delta>5?'YES — surging & intensifying':delta<-5?'Surging, but starting to ease':'YES — surging';
+  }else if(now>=TH.ELEVATED){
+    head=delta>5?'Ramping up fast':(peakHr>=TH.SURGE?'Cooling down from a surge':'Elevated — building');
+  }else if(now>=TH.BUSY){
+    head=(peakHr>=TH.SURGE-5)?'Surge has passed — cooling off':'Normal activity';
+  }else{
+    head=(peakHr>=TH.SURGE-5)?'Surge is over — back to calm':'Calm — no surge';
+  }
+  sub=(trend?trend:'')+peakTxt || 'live';
+  return {head,sub,color:col};
+}
+
+// fluid gauge: ease the needle + number toward each new target via rAF
+let gauge={cur:0,tgt:0,lvl:'CALM',raf:null};
+function animateGauge(){
+  const cv=document.getElementById('gauge');
+  if(!cv){gauge.raf=null;return;}
+  const d=gauge.tgt-gauge.cur;
+  if(Math.abs(d)<0.2)gauge.cur=gauge.tgt; else gauge.cur+=d*0.12;
+  drawGauge(cv,gauge.cur,gauge.lvl);
+  const g=document.getElementById('gnum');if(g)g.textContent=Math.round(gauge.cur);
+  gauge.raf=(gauge.cur!==gauge.tgt)?requestAnimationFrame(animateGauge):null;
+}
+
+function render(j){
+  const L=j.latest||{},hist=j.history||{t:[]};
+  const now=j.server_time||(Date.now()/1000);
+  const sc=L.surge_score,lvl=L.surge_level||levelFor(sc||0);
+  const col=LEVEL_COLOR[lvl]||'#8b949e';
+  // gauge — ease needle + number fluidly to the new target
+  document.getElementById('gnum').style.color=col;
+  const gl=document.getElementById('glvl');gl.textContent=LEVEL_WORD[lvl]||'';gl.style.color=col;
+  gauge.tgt=(sc==null)?0:sc; gauge.lvl=lvl;
+  if(gauge.raf==null)gauge.raf=requestAnimationFrame(animateGauge);
+  // make each refresh visible: on a NEW tick, restart the countdown bar and
+  // flash the number (white blink + scale pulse, settling back to level color)
+  if(j.updated_at && j.updated_at!==lastUpdatedAt){
+    const iv=j.interval||5, rb=document.getElementById('refresh-bar');
+    if(rb){rb.style.transition='none';rb.style.transform='scaleX(0)';
+      requestAnimationFrame(()=>{rb.style.transition=`transform ${iv}s linear`;rb.style.transform='scaleX(1)';});}
+    const g=document.getElementById('gnum');
+    if(g){g.style.color='#ffffff';g.classList.remove('gpulse');void g.offsetWidth;g.classList.add('gpulse');
+      clearTimeout(g._settle);g._settle=setTimeout(()=>{g.style.color=col;},130);}
+    lastSurge=sc; lastUpdatedAt=j.updated_at;
+  }
+  // tab title + favicon reflect the level (visible when backgrounded); glow on SURGE
+  document.title=`${LEVEL_EMOJI[lvl]||'⚪'} ${sc==null?'—':sc} ${LEVEL_WORD[lvl]||''} · Solana surge`;
+  setFavicon(col);
+  document.querySelector('.hero').classList.toggle('surging',lvl==='SURGE');
+  // jito tip floor — display in SOL (API gives lamports)
+  const sol=v=>{if(v==null)return '—';const s=v/1e9;
+    return s>=0.1?s.toFixed(3):s>=0.001?s.toFixed(5):s.toPrecision(2);};
+  const ji=j.jito||{};
+  setTxt('jito-p50',sol(ji.p50));setTxt('jito-p75',sol(ji.p75));
+  setTxt('jito-p95',sol(ji.p95));setTxt('jito-p99',sol(ji.p99));
+  // verdict
+  const v=computeVerdict(hist);
+  const vh=document.getElementById('vhead');vh.textContent=v.head;vh.style.color=v.color;
+  document.getElementById('vsub').textContent=v.sub;
+  // what's driving the surge: signals elevated above baseline + busiest venues
+  const drv=Object.values(j.components||{}).filter(c=>c&&c.heat>=25)
+    .sort((a,b)=>b.contribution-a.contribution).slice(0,3).map(c=>c.label);
+  const ven=Object.entries(j.meme_by_program||{}).filter(([k,d])=>d&&d.tps)
+    .sort((a,b)=>b[1].tps-a[1].tps).slice(0,2).map(([k])=>k);
+  const dvEl=document.getElementById('vdrivers');
+  if(dvEl){
+    // always present, content adapts (no appear/disappear layout jump)
+    let html = drv.length
+      ? `<span class="lbl">Driven by:</span> ${drv.slice(0,2).join(' · ')}`
+      : `<span class="lbl">Activity near baseline</span>`;
+    if(ven.length) html += ` <span class="lbl">· busiest:</span> ${ven.join(', ')}`;
+    dvEl.innerHTML=html;
+  }
+  // hero chart (recent) — FIXED 20-min window (data fills from the right)
+  const RECENT_MIN=20;
+  const rt=hist.t||[],rs=hist.surge_score||[];
+  drawHero(document.getElementById('hero-chart'),rt,rs,lvl,[now-RECENT_MIN*60,now]);
+  document.getElementById('chart-label').textContent=`Last ${RECENT_MIN} minutes`;
+  document.getElementById('chart-span').textContent='';
+  // 24h chart — FIXED 24h window: collected data sits at the right, the rest is empty
+  const h24=j.history24h||{t:[],surge_score:[]};
+  drawHero(document.getElementById('hero-chart-24h'),h24.t||[],h24.surge_score||[],lvl,[now-86400,now],{markPeak:true});
+  if(h24.t&&h24.t.length>1){
+    const sp=(h24.t[h24.t.length-1]-h24.t[0])/3600;
+    document.getElementById('chart-span-24').textContent=sp>=1?`${sp.toFixed(0)}h of data so far`:`${Math.round(sp*60)} min of data so far`;
+  }else document.getElementById('chart-span-24').textContent='building up…';
+
+  // surging meme coins with STICKY DECAY: a surge pops in at its score, then
+  // fades out over a few 15s ticks once it stops (no flicker; graceful exit).
+  // The decay step runs once per movers update, not per render poll.
+  if(j.movers_updated_at && j.movers_updated_at!==lastMoversUpdate){
+    lastMoversUpdate=j.movers_updated_at;
+    const incoming={};(j.movers||[]).forEach(m=>{incoming[m.url||m.symbol]=m;});
+    const next={};
+    new Set([...Object.keys(surgeMem),...Object.keys(incoming)]).forEach(k=>{
+      const m=incoming[k]||(surgeMem[k]&&surgeMem[k].m); if(!m)return;
+      const live=incoming[k]?surgeScore(incoming[k]):0;     // 0 if it left the pool
+      const prev=surgeMem[k]?surgeMem[k].disp:0;
+      const disp=Math.max(live, prev-SURGE_DECAY);          // rise to live, else decay toward it
+      if(disp>=0.5) next[k]={m,disp,live};
+    });
+    surgeMem=next;
+  }
+  const mv=document.getElementById('movers');
+  const list=Object.values(surgeMem).filter(e=>Math.round(e.disp)>=1)
+    .sort((a,b)=>b.disp-a.disp).slice(0,8);
+  if(!list.length){
+    mv.innerHTML=`<tr><td colspan="9" style="text-align:center;color:var(--mut);padding:22px">`+
+      `No meme coins surging up right now</td></tr>`;
+  }else{
+    mv.innerHTML=list.map((e,i)=>{
+      const m=e.m, sc=Math.round(e.disp), cool=e.live<sc;   // displayed > live => fading
+      const sym=m.url?`<a href="${m.url}" target="_blank">${m.symbol}</a>`:m.symbol;
+      return `<tr${cool?' style="opacity:.5"':''}><td>${i+1}</td><td class="sym">${sym}</td>${ageCell(m.created_at,now)}<td>${price(m.price)}</td>`+
+        `<td>${usd(m.mc)}</td>${pctCell(m.chg_m5)}${pctCell(m.chg_h1)}<td>${usd(m.vol_h1)}</td>${surgeBar(sc,m)}</tr>`;
+    }).join('');
+  }
+
+  // drivers (heat breakdown)
+  const comps=j.components||{};
+  const order=['meme_tps','meme_fail_rate','nonvote_tps','fee_contention','fee_p90','pump_launches_min'];
+  const dr=document.getElementById('drivers');dr.innerHTML='';
+  order.forEach(k=>{const c=comps[k];if(!c)return;
+    const heat=c.heat||0;const hc=heat>=66?'#f85149':heat>=33?'#db6d28':'#3fb950';
+    dr.innerHTML+=`<div class="driver"><div class="dl">${c.label}</div>
+      <div class="dbar"><div class="dfill" style="width:${heat}%;background:${hc}"></div></div>
+      <div class="dv">${heat}</div></div>`;
+  });
+
+  // cards
+  if(!document.getElementById('c_'+CARDS[0].k)){
+    const g=document.getElementById('cards');g.innerHTML='';
+    CARDS.forEach(c=>{const d=document.createElement('div');d.className='mcard';
+      d.innerHTML=`<div class="lbl">${c.lbl}</div><div class="val"><span id="v_${c.k}">—</span><small id="u_${c.k}">${c.unit}</small></div><canvas id="c_${c.k}"></canvas>`;
+      g.appendChild(d);});
+  }
+  CARDS.forEach(c=>{document.getElementById('v_'+c.k).textContent=fmt(L[c.k],c.fmt);
+    sparkline(document.getElementById('c_'+c.k),(hist[c.k])||[],c.color);});
+
+  // venues
+  const mp=j.meme_by_program||{};const maxT=Math.max(1,...Object.values(mp).map(d=>d.tps||0));
+  const ve=document.getElementById('venues');ve.innerHTML='';
+  for(const [name,d] of Object.entries(mp)){
+    const fp=(d.fail_rate!=null)?d.fail_rate*100:null;
+    const fc=fp>=70?'#f85149':fp>=40?'#db6d28':'#3fb950';
+    ve.innerHTML+=`<div class="venue"><div>${name}</div>
+      <div class="vbar"><div class="vfill" style="width:${100*(d.tps||0)/maxT}%"></div></div>
+      <div class="vmeta">${fmt(d.tps,'int')} tx/s · <span style="color:${fc}">${fp==null?'—':fp.toFixed(0)+'% fail'}</span></div></div>`;
+  }
+
+  // pump.fun stream health -> folded into the Launches/min card (in details)
+  const p=j.pump||{};
+  const ue=document.getElementById('u_pump_launches_min');
+  if(ue)ue.innerHTML=p.pump_connected?'pump.fun · <span style="color:#3fb950">live</span>':'pump.fun · connecting…';
+  // SOL price (macro context, header)
+  const spx=j.sol||{},spEl=document.getElementById('solprice');
+  if(spEl){
+    if(spx.price!=null){const c=spx.change_24h,cc=(c==null)?'var(--mut)':c>=0?'#3fb950':'#f85149',ar=(c==null)?'':c>=0?'▲':'▼';
+      spEl.innerHTML=`SOL $${spx.price.toFixed(2)}`+(c==null?'':` <span class="chg" style="color:${cc}">${ar} ${Math.abs(c).toFixed(1)}%</span>`);
+    }else spEl.textContent='';
+  }
+  lastInterval=j.interval||lastInterval;
+  moversInterval=j.movers_interval||moversInterval;
+  const nowc=Date.now();
+  freshRef.surge={age:Math.max(0,(j.server_time-j.updated_at)||0),t:nowc};
+  freshRef.movers={age:Math.max(0,(j.server_time-(j.movers_updated_at||j.updated_at))||0),t:nowc};
+  updateFresh();
+}
+
+async function tick(){
+  try{const r=await fetch('/api/data',{cache:'no-store'});render(await r.json());}
+  catch(e){document.getElementById('updated').textContent='disconnected — retrying';}
+}
+tick();setInterval(tick,4000);
+</script>
+</body>
+</html>

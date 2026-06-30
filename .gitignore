@@ -1,0 +1,7 @@
+data/
+__pycache__/
+*.pyc
+# local config / secrets (the namespaced env file holding the RPC URL)
+.env
+.env.*
+!.env.*.example
