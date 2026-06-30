@@ -19,7 +19,7 @@
   /* SIGNATURE — the page's top edge is the gauge: a full-width rail that shifts
      mint->hot with the live surge level (--surge), pulsing while surging. */
   body::before{content:"";position:fixed;inset:0 0 auto 0;height:3px;z-index:60;
-    background:var(--surge);box-shadow:0 0 14px 0 var(--surge);
+    pointer-events:none;background:var(--surge);box-shadow:0 0 14px 0 var(--surge);
     transition:background .7s ease,box-shadow .7s ease}
   body.surging::before{animation:railPulse 1.8s ease-in-out infinite}
   @keyframes railPulse{0%,100%{box-shadow:0 0 10px 0 var(--surge)}
@@ -27,17 +27,22 @@
   /* typographic voice: humanist sans for labels, monospace for all telemetry */
   .g-num,.g-lvl,.jstat .jv,.mcard .val,.solprice,.rpcbadge,.chart-cap,.zones,
   table,.driver .dv,.venue .vmeta{font-family:var(--mono)}
+  /* respect OS "reduce motion": neutralize the looping pulses/glows (incl. the
+     always-on surge rail) without affecting layout */
+  @media (prefers-reduced-motion:reduce){
+    *{animation-duration:.001ms!important;animation-iteration-count:1!important}
+  }
   header{display:flex;align-items:center;justify-content:space-between;
     padding:16px 24px;border-bottom:1px solid var(--line)}
-  header h1{font-size:15px;margin:0;font-weight:700;letter-spacing:1.3px;
+  header h1{font-size:15px;margin:0;font-weight:700;letter-spacing:1.3px;color:var(--purple);
     background:linear-gradient(90deg,var(--brand),var(--brand2));
-    -webkit-background-clip:text;background-clip:text;color:transparent}
+    -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
   header .meta{font-size:12px;color:var(--mut);text-align:right}
   .live{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--green);justify-content:flex-end}
   .live.off{color:var(--mut)}
   .live .pulse{width:8px;height:8px;border-radius:50%;background:currentColor}
   .live:not(.off) .pulse{animation:pulse 1.6s infinite}
-  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.5)}70%{box-shadow:0 0 0 7px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(20,241,149,.5)}70%{box-shadow:0 0 0 7px rgba(20,241,149,0)}100%{box-shadow:0 0 0 0 rgba(20,241,149,0)}}
   .fresh{font-size:11px;color:var(--mut);font-weight:400;letter-spacing:0;text-transform:none;white-space:nowrap}
   .solprice{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap}
   .solprice .chg{margin-left:5px;font-weight:600}
@@ -55,7 +60,7 @@
   .jstat .jv{font-size:22px;font-weight:700}
   .jstat .ju{font-size:11px;color:var(--mut);font-weight:400;margin-left:3px}
   .hero.surging{animation:surgeGlow 1.8s ease-in-out infinite}
-  @keyframes surgeGlow{0%,100%{box-shadow:0 0 0 1px rgba(248,81,73,0)}50%{box-shadow:0 0 26px 1px rgba(248,81,73,.45)}}
+  @keyframes surgeGlow{0%,100%{box-shadow:0 0 0 1px rgba(255,77,109,0)}50%{box-shadow:0 0 26px 1px rgba(255,77,109,.45)}}
   .wrap{padding:22px;max-width:1100px;margin:0 auto}
 
   /* ---- hero surge meter ---- */
@@ -292,7 +297,15 @@ function usd(v){if(v===null||v===undefined)return '—';
   for(const [d,s] of [[1e9,'B'],[1e6,'M'],[1e3,'K']])if(Math.abs(v)>=d)return '$'+(v/d).toFixed(1)+s;
   return '$'+(v).toFixed(0);}
 function price(v){if(v===null||v===undefined)return '—';
-  if(v>=1)return '$'+v.toFixed(2); if(v>=0.0001)return '$'+v.toFixed(5); return '$'+v.toExponential(2);}
+  if(v>=1)return '$'+v.toFixed(2);
+  if(v>=0.0001)return '$'+v.toFixed(5);
+  if(v<=0)return '$0';
+  // sub-$0.0001: DexScreener-style subscript-zero notation, e.g. 0.0000508 -> $0.0₄508
+  const [mant,exp]=v.toExponential(2).split('e');
+  const zeros=-parseInt(exp,10)-1;
+  const sub=String(zeros).replace(/[0-9]/g,d=>'₀₁₂₃₄₅₆₇₈₉'[+d]);
+  const digits=mant.replace('.','').replace(/0+$/,'')||'0';
+  return '$0.0'+sub+digits;}
 function pctCell(v){if(v===null||v===undefined)return '<td>—</td>';
   const c=v>=0?'up':'down';return `<td class="${c}">${v>=0?'+':''}${v.toFixed(0)}%</td>`;}
 /* Upward Surge 0-10: gated to coins rising RIGHT NOW (5m up), then sized by
