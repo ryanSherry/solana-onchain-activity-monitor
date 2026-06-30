@@ -18,6 +18,7 @@ Endpoints:
 from __future__ import annotations
 
 import argparse
+import bisect
 import calendar
 import csv
 import glob
@@ -51,11 +52,19 @@ _state = {
     "sol": {},
     "movers": [],
     "rpc": [],                         # RPC pool health (failover status)
+    "surge_context": None,             # current surge vs the trailing-week distribution
     "history": deque(maxlen=480),      # fine-grained recent chart (~4h at 30s)
     "history24h": deque(maxlen=6000),  # {t, surge_score} for the 24h chart
 }
 _lock = threading.Lock()
 _pump = None
+
+# Trailing-week surge_score distribution -> "how unusual is right now?" percentile.
+# Touched only by the single surge loop thread (the snapshot reads the derived
+# _state["surge_context"], never these), so no lock is needed here.
+_BASELINE_DAYS = 7
+_baseline = deque()        # (t_epoch, surge_score) over the trailing week
+_baseline_sorted = []      # cached ascending scores, rebuilt ~once a minute
 
 
 def _ts_to_epoch(ts):
@@ -95,6 +104,52 @@ def _seed_history(csv_dir):
     _state["history24h"].extend(seen)
 
 
+def _seed_baseline(csv_dir):
+    """Seed the trailing-week surge_score distribution from the daily CSVs."""
+    cutoff = time.time() - _BASELINE_DAYS * 86400
+    pts = []
+    for d in range(_BASELINE_DAYS):
+        day = time.strftime("%Y%m%d", time.gmtime(time.time() - d * 86400))
+        for r in monitor.read_history_rows(csv_dir, day=day):
+            t = _ts_to_epoch(r.get("timestamp_utc"))
+            s = r.get("surge_score")
+            if t is not None and s is not None and t >= cutoff:
+                pts.append((t, s))
+    pts.sort()
+    _baseline.extend(pts)
+    _refresh_baseline()
+
+
+def _refresh_baseline():
+    """Drop entries older than a week and rebuild the cached sorted distribution."""
+    global _baseline_sorted
+    cutoff = time.time() - _BASELINE_DAYS * 86400
+    while _baseline and _baseline[0][0] < cutoff:
+        _baseline.popleft()
+    _baseline_sorted = sorted(s for _, s in _baseline)
+
+
+def _surge_context(cur):
+    """Where the current surge sits in the trailing-week distribution: its
+    percentile plus reference points (typical p50, p95, peak). None until there
+    are enough samples (>=60) for the comparison to mean anything."""
+    scores = _baseline_sorted
+    n = len(scores)
+    if cur is None or n < 60:
+        return None
+    q = lambda p: scores[min(n - 1, int(p * (n - 1)))]   # standard nearest-rank
+    span_h = (_baseline[-1][0] - _baseline[0][0]) / 3600 if len(_baseline) > 1 else 0
+    return {
+        # strictly-less count, capped: the cached distribution lags the live value
+        # by up to a minute, so a fresh high must not read a contradictory 100%
+        "percentile": min(99, round(100 * bisect.bisect_left(scores, cur) / n)),
+        "is_peak": cur >= scores[-1],          # at/above the trailing-week high
+        "p50": q(0.50), "p95": q(0.95),
+        "max": max(scores[-1], cur),           # never below the live value
+        "hours": span_h, "n": n,
+    }
+
+
 def _downsample(samples, n=240):
     """Bucket {t, surge_score} samples into <=n points, keeping the PEAK per
     bucket so surges stay visible. Returns columnar {t, surge_score}."""
@@ -125,6 +180,7 @@ def _surge_loop(rpc, interval, csv_dir):
     for r in monitor.read_history_rows(csv_dir):
         tracker.update(r)
     _seed_history(csv_dir)
+    _seed_baseline(csv_dir)
     try:
         import pumpstream
         _pump = pumpstream.PumpStream()
@@ -136,6 +192,7 @@ def _surge_loop(rpc, interval, csv_dir):
     last_jito = 0.0
     last_sol = 0.0
     last_health = 0.0
+    last_ctx = 0.0
     cur_skip = None
     while True:
         start = time.time()
@@ -159,9 +216,15 @@ def _surge_loop(rpc, interval, csv_dir):
             tracker.update(row)
 
             now = time.time()
+            # trailing-week distribution for the "how unusual is now?" percentile
+            _baseline.append((now, score))
+            if now - last_ctx >= 60:
+                _refresh_baseline()
+                last_ctx = now
             with _lock:
                 _state["latest"] = row
                 _state["rpc"] = rpc.status()
+                _state["surge_context"] = _surge_context(score)
                 _state["components"] = comps
                 if meme_by_program:
                     _state["meme_by_program"] = meme_by_program
@@ -224,6 +287,7 @@ def _snapshot():
             "sol": _state["sol"],
             "movers": _state["movers"],
             "rpc": _state["rpc"],
+            "surge_context": _state["surge_context"],
         }
     # fresh pump rates (continuous between collection ticks)
     if _pump is not None:
