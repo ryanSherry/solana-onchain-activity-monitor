@@ -89,6 +89,12 @@ newborns). That's why the index uses **launch rate**, not a websocket trade rate
   account and pool the non-zero floors instead.
 - **At very high rates 1000 sigs span <1 slot** — floor the span at 1 slot so the
   busiest venue (pumpswap) still yields a rate instead of dropping out.
+- **Venue drift (A5):** `block_stats` tallies the busiest programs by non-vote tx
+  count from the blocks it already fetches (instruction `programIdIndex` resolved
+  through static + ALT-loaded keys; `_INFRA_PROGRAMS` excluded), returned as
+  `venue_top`. `HOT_VENUES` is static and meme activity migrates, so an untracked
+  program that's as busy as a tracked venue is flagged (validate per the
+  "Adding a DEX venue" rule before adding). Free -- reuses the getBlock data.
 - **RPC self-health (C2):** `RpcPool.call` times every request and records
   ok/429/error per endpoint (rolling `HEALTH_WINDOW`); `status()` exposes p50/p99
   latency + error/429 rate. 429 detection is `HTTPError.code == 429`. This is our

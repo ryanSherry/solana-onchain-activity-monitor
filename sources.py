@@ -531,6 +531,23 @@ def network_health(rpc_url: str) -> dict:
 BLOCK_CU_LIMIT = 48_000_000
 _VOTE_PROGRAM = "Vote111111111111111111111111111111111111111"
 
+# Infra programs that appear in ~every tx -- excluded from the venue-drift tally
+# (they're not swap venues). Everything else is a candidate "venue".
+_INFRA_PROGRAMS = {
+    "11111111111111111111111111111111",            # System
+    _VOTE_PROGRAM,                                  # Vote
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",  # SPL Token
+    "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",  # Token-2022
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",  # Associated Token
+    "ComputeBudget111111111111111111111111111111",  # Compute Budget
+    "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",  # Memo v2
+    "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo",  # Memo v1
+}
+
+
+def _venue_by_program():
+    return {pid: name for name, pid in HOT_VENUES.items()}
+
 
 def block_stats(rpc, blocks: int = 3) -> dict:
     """Aggregate the last `blocks` finalized blocks -> direct landing signals:
@@ -565,6 +582,7 @@ def block_stats(rpc, blocks: int = 3) -> dict:
         return {}
     total_cu = nonvote = nonvote_fail = total_txs = 0
     fee_per_cu = []
+    prog_txs = {}                     # program -> # of non-vote txs invoking it
     for _, b in got:
         for t in b["transactions"]:
             total_txs += 1
@@ -581,8 +599,24 @@ def block_stats(rpc, blocks: int = 3) -> dict:
             priority = max(0, (meta.get("fee") or 0) - 5000 * len(sigs))  # strip base
             if cu > 0:
                 fee_per_cu.append(priority / cu * 1e6)   # micro-lamports per CU
+            # venue-drift tally: which programs are handling load? Resolve the
+            # instruction's programIdIndex against static keys + ALT-loaded ones,
+            # count each program once per tx, drop infra programs.
+            keys = ((msg.get("accountKeys") or [])
+                    + ((meta.get("loadedAddresses") or {}).get("writable") or [])
+                    + ((meta.get("loadedAddresses") or {}).get("readonly") or []))
+            progs = set()
+            for ins in (msg.get("instructions") or []):
+                idx = ins.get("programIdIndex")
+                if idx is not None and 0 <= idx < len(keys) and keys[idx] not in _INFRA_PROGRAMS:
+                    progs.add(keys[idx])
+            for p in progs:
+                prog_txs[p] = prog_txs.get(p, 0) + 1
     fee_per_cu.sort()
     n = len(got)
+    venue_map = _venue_by_program()
+    venue_top = [{"program": p, "txs": c, "venue": venue_map.get(p)}
+                 for p, c in sorted(prog_txs.items(), key=lambda kv: -kv[1])[:12]]
 
     def q(p):
         return round(fee_per_cu[min(len(fee_per_cu) - 1, int(p * len(fee_per_cu)))])
@@ -595,6 +629,7 @@ def block_stats(rpc, blocks: int = 3) -> dict:
         "block_txs": total_txs,
         "block_nonvote": nonvote,
         "block_count": n,              # blocks actually aggregated
+        "venue_top": venue_top,        # busiest programs; venue=None => untracked (drift)
     }
 
 

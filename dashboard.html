@@ -275,6 +275,8 @@
       <div class="grid" id="cards"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:6px 0 10px;text-transform:uppercase;letter-spacing:.5px">DEX venue trade &amp; failure rate (top 9 by tx volume)</h2>
       <div id="venues"></div>
+      <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">Program coverage (venue drift) <span class="info" data-tip="Busiest programs in recent blocks by tx count. 'untracked' = not in our HOT_VENUES list. If a meme/DEX program consistently ranks high here, the meme-load signal is missing it — validate it (getSignaturesForAddress tx rate) and add it to sources.HOT_VENUES.">?</span></h2>
+      <div id="venue-drift"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">RPC endpoint health <span class="info" data-tip="Our OWN RPC path: per-node response latency (p50/p99), error rate, and rate-limit (HTTP 429) rate over recent calls. Rising latency or 429s here is the earliest warning that the lander is about to get throttled.">?</span></h2>
       <div id="rpc-health"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">Data source health <span class="info" data-tip="Freshness of each external feed. A stale/down source means its numbers are frozen at the last-known-good value — so you know when NOT to trust them.">?</span></h2>
@@ -758,6 +760,27 @@ function render(j){
     ve.innerHTML+=`<div class="venue"><div>${name}</div>
       <div class="vbar"><div class="vfill" style="width:${100*(d.tps||0)/maxT}%"></div></div>
       <div class="vmeta">${fmt(d.tps,'int')} tx/s · <span style="color:${fc}">${fp==null?'—':fp.toFixed(0)+'% fail'}</span></div></div>`;
+  }
+  // venue drift — busiest programs in recent blocks; untracked ones (not in
+  // HOT_VENUES) flagged so a migrating meme scene doesn't silently escape coverage
+  const vd=document.getElementById('venue-drift');
+  if(vd){
+    const vt=(j.block||{}).venue_top||[];
+    // real drift = an UNtracked program as busy as a tracked venue (there are
+    // always busy non-venue programs — Jupiter, oracles, bots — so raw untracked
+    // count is noise; the floor is what makes it meaningful)
+    const trk=vt.filter(v=>v.venue).map(v=>v.txs);
+    const floor=trk.length?Math.min(...trk):Infinity;
+    const drift=vt.filter(v=>!v.venue&&v.txs>=floor).length;
+    vd.innerHTML = vt.length ? vt.map(v=>{
+      const nm=v.venue||`${v.program.slice(0,4)}…${v.program.slice(-4)}`;
+      const hot=!v.venue&&v.txs>=floor;            // untracked AND venue-busy
+      const tag=v.venue?'':(hot?' <span style="color:#ff4d6d">· untracked, busy</span>':' <span style="color:var(--mut)">· untracked</span>');
+      return `<div style="display:flex;justify-content:space-between;gap:10px;margin:5px 0;font-size:12px">`
+        +`<span style="color:${v.venue?'var(--tx)':(hot?'#ff4d6d':'var(--mut)')};font-weight:${hot?700:400}">${nm}${tag}</span>`
+        +`<span style="color:var(--mut);font-variant-numeric:tabular-nums">${v.txs} tx</span></div>`;
+    }).join('') + (drift?`<div style="font-size:11px;color:#ff4d6d;margin-top:8px">⚠ ${drift} untracked program(s) as busy as a tracked venue — likely missing coverage; validate &amp; add to HOT_VENUES.</div>`:'')
+      : '<div style="color:var(--mut);font-size:12px">gathering block data…</div>';
   }
 
   // RPC endpoint health — our OWN path (latency + error/429), earliest throttle warning

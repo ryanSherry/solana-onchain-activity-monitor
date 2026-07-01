@@ -52,6 +52,18 @@ a per-slot automated consumer ever wants it.
 tx lands is keyed on the writable accounts it touches (pump.fun global / bonding-
 curve account, hottest token mints). Sample `getRecentPrioritizationFees` for those.
 
+### A5. Venue-list drift detection  ✅ shipped
+`HOT_VENUES` is a static list, so a migrating meme scene silently escapes coverage.
+`block_stats` now also tallies, in the SAME pass over the blocks it already
+fetches, the busiest programs by non-vote tx count (resolving each instruction's
+`programIdIndex` through static keys + ALT-loaded addresses, dropping infra
+programs). Returns `venue_top` (top 12 with a `venue` name or None=untracked); the
+dashboard flags an untracked program that's **as busy as a tracked venue** as
+likely-missing coverage. On first run it already surfaced an untracked program
+busier than tracked pumpswap. Near-free (reuses the getBlock data). Next idea:
+aggregate the tally over more samples for a stabler drift signal, or auto-open a
+"validate this program" checklist.
+
 ### A4. Macro context  📋
 Add BTC + total-market change and SOL realized volatility (CoinGecko, cheap) beside
 the SOL price. Risk-on regimes drive Solana frenzies — leading-ish context.
