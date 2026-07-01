@@ -52,6 +52,26 @@ a per-slot automated consumer ever wants it.
 tx lands is keyed on the writable accounts it touches (pump.fun global / bonding-
 curve account, hottest token mints). Sample `getRecentPrioritizationFees` for those.
 
+### A5. Venue-list drift detection  ✅ shipped
+`HOT_VENUES` is a static list, so a migrating meme scene silently escapes coverage.
+`block_stats` tallies, in the SAME pass over the blocks it already fetches, the
+busiest programs by non-vote tx count (resolving each top-level instruction's
+`programIdIndex` through static keys + ALT-loaded addresses, dropping infra
+programs) and returns per-sample `venue_counts` ({program: txs}, top 40). The
+**server aggregates the last ~10 samples** (`_aggregate_venue_top`, `_venue_samples`
+deque) into a STABLE top-12 `venue_top` — a single ~1s-of-chain block sample is far
+too noisy to read as "drift." The dashboard shows the aggregate with untracked
+programs (no `venue` name) in **amber, informational only**: aggregators (Jupiter)
+and perps rank high perennially but must NOT be added (they CPI into venues we
+already track), so the tool doesn't cry wolf — an untracked program that *stays*
+near the top is the operator's cue to validate (`getSignaturesForAddress` tx rate)
+and add it. First run surfaced an untracked program busier than tracked pumpswap.
+Near-free (reuses the getBlock data). **Known limit:** top-level-instruction
+counting only, so a tracked venue reached via an aggregator CPI is under-counted
+(fine for "is this program on our list?"; the operator judges, so it doesn't
+mislead). Next idea: auto-open a "validate this program" checklist for a
+persistently-high untracked program.
+
 ### A4. Macro context  📋
 Add BTC + total-market change and SOL realized volatility (CoinGecko, cheap) beside
 the SOL price. Risk-on regimes drive Solana frenzies — leading-ish context.

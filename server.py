@@ -76,6 +76,24 @@ _db = None            # SQLite path, set in main -- for the snapshot + POST hand
 # surge loop injects it into each row. Written by _block_loop, read by the surge
 # loop and snapshot under _lock.
 _block_latest = {}
+# rolling window of per-sample program counts -> a STABLE venue_top (a single
+# ~1s-of-chain block sample is far too noisy to call "drift" from)
+_venue_samples = deque(maxlen=10)
+
+
+def _aggregate_venue_top(samples):
+    """Sum per-sample program counts over the window -> busiest programs, named if
+    tracked (venue) else None (untracked -> a candidate the operator should
+    validate). Deliberately no auto-flag/alert: aggregators (Jupiter) and perps are
+    perennially busy but must NOT be added (they CPI into tracked DEXes), so the
+    operator judges rather than the tool crying wolf."""
+    total = {}
+    for s in samples:
+        for p, c in s.items():
+            total[p] = total.get(p, 0) + c
+    vm = sources._venue_by_program()
+    return [{"program": p, "txs": c, "venue": vm.get(p)}
+            for p, c in sorted(total.items(), key=lambda kv: -kv[1])[:12]]
 
 # Time-of-day baselines: {signal: {utc_hour: (center, robust_sigma)}}, rebuilt
 # from the SQLite history on a slow cadence. The surge loop passes the current
@@ -319,6 +337,10 @@ def _block_loop(rpc, interval, samples):
             b = None
         if b:
             misses = 0
+            # fold this sample's raw program counts into the rolling window and
+            # publish the STABLE aggregate as venue_top (single samples are too noisy)
+            _venue_samples.append(b.pop("venue_counts", {}))
+            b["venue_top"] = _aggregate_venue_top(_venue_samples)
             with _lock:
                 # publish a fresh dict wholesale (never mutate a published one) so
                 # the snapshot can share the ref without copying it under the lock

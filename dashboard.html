@@ -275,6 +275,8 @@
       <div class="grid" id="cards"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:6px 0 10px;text-transform:uppercase;letter-spacing:.5px">DEX venue trade &amp; failure rate (top 9 by tx volume)</h2>
       <div id="venues"></div>
+      <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">Program coverage (venue drift) <span class="info" data-tip="Busiest programs across the last few minutes of blocks, by tx count (server aggregates the samples so this is stable, not a 1s snapshot). 'untracked' (amber) = not in our HOT_VENUES list. Aggregators (Jupiter) and perps rank high but should NOT be added — they route into venues we already track. If an untracked meme/DEX program stays near the top, validate it (getSignaturesForAddress tx rate) and add it to sources.HOT_VENUES.">?</span></h2>
+      <div id="venue-drift"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">RPC endpoint health <span class="info" data-tip="Our OWN RPC path: per-node response latency (p50/p99), error rate, and rate-limit (HTTP 429) rate over recent calls. Rising latency or 429s here is the earliest warning that the lander is about to get throttled.">?</span></h2>
       <div id="rpc-health"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">Data source health <span class="info" data-tip="Freshness of each external feed. A stale/down source means its numbers are frozen at the last-known-good value — so you know when NOT to trust them.">?</span></h2>
@@ -758,6 +760,23 @@ function render(j){
     ve.innerHTML+=`<div class="venue"><div>${name}</div>
       <div class="vbar"><div class="vfill" style="width:${100*(d.tps||0)/maxT}%"></div></div>
       <div class="vmeta">${fmt(d.tps,'int')} tx/s · <span style="color:${fc}">${fp==null?'—':fp.toFixed(0)+'% fail'}</span></div></div>`;
+  }
+  // venue drift — busiest programs across the last few minutes of blocks (server
+  // aggregates the samples). Untracked programs (not in HOT_VENUES) are shown in
+  // amber. Informational, not an alert: aggregators (Jupiter) & perps rank high
+  // but must NOT be added — an untracked program that STAYS near the top is the
+  // operator's cue to validate (getSignaturesForAddress tx rate) and add it.
+  const vd=document.getElementById('venue-drift');
+  if(vd){
+    const vt=(j.block||{}).venue_top||[];
+    vd.innerHTML = vt.length ? vt.map(v=>{
+      const nm=v.venue||`${v.program.slice(0,4)}…${v.program.slice(-4)}`;
+      const tag=v.venue?'':' <span style="color:var(--orange)">· untracked</span>';
+      return `<div style="display:flex;justify-content:space-between;gap:10px;margin:5px 0;font-size:12px">`
+        +`<span style="color:${v.venue?'var(--tx)':'var(--orange)'}">${nm}${tag}</span>`
+        +`<span style="color:var(--mut);font-variant-numeric:tabular-nums">${v.txs} tx</span></div>`;
+    }).join('')
+      : '<div style="color:var(--mut);font-size:12px">gathering block data…</div>';
   }
 
   // RPC endpoint health — our OWN path (latency + error/429), earliest throttle warning

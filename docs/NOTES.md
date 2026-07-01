@@ -89,6 +89,22 @@ newborns). That's why the index uses **launch rate**, not a websocket trade rate
   account and pool the non-zero floors instead.
 - **At very high rates 1000 sigs span <1 slot** — floor the span at 1 slot so the
   busiest venue (pumpswap) still yields a rate instead of dropping out.
+- **Venue drift (A5):** `block_stats` tallies the busiest programs by non-vote tx
+  count from the blocks it already fetches (top-level instruction `programIdIndex`
+  resolved through static + ALT-loaded keys; `_INFRA_PROGRAMS` excluded), returned
+  as per-sample `venue_counts`. The **server aggregates ~10 samples**
+  (`_aggregate_venue_top`) into a stable `venue_top` — one ~1s block sample is far
+  too noisy to call "drift." `HOT_VENUES` is static and meme activity migrates, so
+  untracked programs (no `venue` name) are shown **amber, informational** — NOT an
+  auto-alert. Deliberately so: aggregators (Jupiter) and perps are perennially busy
+  yet must never be added (they CPI *into* tracked venues, so adding them
+  double-counts), and a floor-based "as busy as a tracked venue" flag false-fires
+  on them constantly (alarm fatigue) and mis-fires at the edges (no tracked venue
+  in the top-12 = the *max* drift case, yet a min()-floor would suppress it). So
+  the operator judges a *persistently* high untracked program and validates it per
+  the "Adding a DEX venue" rule. Top-level-only counting under-counts a tracked
+  venue reached via an aggregator CPI — fine for "is it on our list?". Free —
+  reuses the getBlock data.
 - **RPC self-health (C2):** `RpcPool.call` times every request and records
   ok/429/error per endpoint (rolling `HEALTH_WINDOW`); `status()` exposes p50/p99
   latency + error/429 rate. 429 detection is `HTTPError.code == 429`. This is our
