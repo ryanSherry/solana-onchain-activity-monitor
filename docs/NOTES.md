@@ -170,6 +170,10 @@ self-sizes. Only revisit with a narrowly-filtered subscription.
   so the block fee-per-CU is displayed but kept OUT of the weighted index.
 - **Last-known-good** on transient source misses (movers, venue data) so the UI
   never blanks; per-section freshness tells the truth when a source lags.
+- **Source health (C7):** each feed stamps a last-good time (`*_at` in `_state`);
+  `_source_health` marks it fresh/stale/down (age vs 3x/6x cadence, in `_SOURCES`),
+  surfaced at `/api/data` `sources` + a pill strip. So a *frozen* last-known-good
+  value is visible, not silently trusted. pump is by its websocket-connected flag.
 - **Surge Index** lives in `monitor.py` (`SurgeTracker`, `SURGE_SIGNALS`,
   `_LEVELS`). Each signal's heat is **self-calibrating and variance-aware**: how
   many *robust sigmas* it sits above its own rolling baseline — **median** center,

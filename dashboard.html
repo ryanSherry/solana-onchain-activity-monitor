@@ -161,6 +161,11 @@
     margin-right:5px;vertical-align:middle}
   .rpch .rm{color:var(--mut);font-variant-numeric:tabular-nums}
   .rpch .rs{text-align:right;color:var(--mut);white-space:nowrap}
+  .srcs{display:flex;flex-wrap:wrap;gap:8px}
+  .srcpill{display:inline-flex;align-items:center;gap:6px;font-size:12px;
+    background:#0e0c16;border:1px solid var(--line);border-radius:8px;padding:5px 10px}
+  .srcpill .dot{width:7px;height:7px;border-radius:50%}
+  .srcpill .sa{color:var(--mut);font-variant-numeric:tabular-nums}
 
   /* ---- mobile (tailnet has phones; glanceability anywhere is the point) ---- */
   @media (max-width:720px){
@@ -272,6 +277,8 @@
       <div id="venues"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">RPC endpoint health <span class="info" data-tip="Our OWN RPC path: per-node response latency (p50/p99), error rate, and rate-limit (HTTP 429) rate over recent calls. Rising latency or 429s here is the earliest warning that the lander is about to get throttled.">?</span></h2>
       <div id="rpc-health"></div>
+      <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">Data source health <span class="info" data-tip="Freshness of each external feed. A stale/down source means its numbers are frozen at the last-known-good value — so you know when NOT to trust them.">?</span></h2>
+      <div id="src-health"></div>
     </div>
   </details>
 </div>
@@ -766,6 +773,17 @@ function render(j){
       const state=e.active?'active':(e.healthy?`p${e.priority}`:`cooldown ${e.cooldown_s}s`);
       return `<div class="rpch"><div class="rn"><span class="dot" style="background:${dot}"></span>${nm}</div>`
         +`<div class="rm">p50/p99 ${lat}${err}${r429}</div><div class="rs">${state}</div></div>`;
+    }).join('');
+  }
+  // data source health — freshness of each external feed (stale = frozen value)
+  const sh=document.getElementById('src-health');
+  if(sh){
+    const SC={fresh:'#14f195',stale:'#f2a93b',down:'#ff4d6d',waiting:'var(--mut)'};
+    sh.className='srcs';
+    sh.innerHTML=(j.sources||[]).map(s=>{
+      const age=s.age_s==null?(s.status==='fresh'?'live':s.status):agoStr(s.age_s);
+      return `<span class="srcpill"><span class="dot" style="background:${SC[s.status]||'var(--mut)'}"></span>`
+        +`${s.name} <span class="sa">${s.status==='fresh'?age:s.status}</span></span>`;
     }).join('');
   }
   // pump.fun stream health -> folded into the Launches/min card (in details)

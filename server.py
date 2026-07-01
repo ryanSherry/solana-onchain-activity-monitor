@@ -48,6 +48,9 @@ HISTORY_KEYS = [
 _state = {
     "updated_at": None,
     "movers_updated_at": None,
+    "jito_at": None,                   # last-good times per external source (C7)
+    "sol_at": None,
+    "block_at": None,
     "interval": 30,
     "movers_interval": 15,
     "latest": {},
@@ -252,6 +255,7 @@ def _surge_loop(rpc, interval, db, retention_days=0):
                 if jito:
                     with _lock:
                         _state["jito"] = jito
+                        _state["jito_at"] = now
                 last_jito = now
             # SOL price -- slow-moving macro context, refresh every ~45s
             if now - last_sol >= 45:
@@ -259,6 +263,7 @@ def _surge_loop(rpc, interval, db, retention_days=0):
                 if sp:
                     with _lock:
                         _state["sol"] = sp
+                        _state["sol_at"] = now
                 last_sol = now
             # refresh the cached incident list every ~5 min (also loads it at
             # startup and ages out incidents past the 24h window); POST refreshes
@@ -318,6 +323,7 @@ def _block_loop(rpc, interval, samples):
                 # the snapshot can share the ref without copying it under the lock
                 _block_latest = b
                 _state["block"] = b
+                _state["block_at"] = time.time()
         else:
             misses += 1
             # stop voting frozen stats into the index once they're clearly stale:
@@ -347,6 +353,35 @@ def _tod_loop(db, days, min_samples, min_days, interval=1800):
 
 
 _RPC_MIN_SAMPLES = 20   # recent calls before the RPC 429/latency axes are trusted
+
+
+# (last-update state key, display name, expected cadence seconds). status is
+# fresh < 3x cadence, stale < 6x, else down -- so an operator can tell a frozen
+# last-known-good value from a live one.
+_SOURCES = [
+    ("updated_at", "RPC / surge", 5),
+    ("jito_at", "Jito tips", 10),
+    ("movers_updated_at", "Movers (Gecko)", 15),
+    ("block_at", "Block data", 30),
+    ("sol_at", "SOL price", 45),
+]
+
+
+def _source_health(snap, pump_connected):
+    """Per-source freshness so a stale/down feed is visible, not silently frozen."""
+    now = time.time()
+    out = []
+    for key, name, cadence in _SOURCES:
+        at = snap.get(key)
+        if not at:
+            out.append({"name": name, "age_s": None, "status": "waiting"})
+            continue
+        age = now - at
+        status = "fresh" if age < cadence * 3 else ("stale" if age < cadence * 6 else "down")
+        out.append({"name": name, "age_s": round(age), "status": status})
+    out.append({"name": "pump.fun stream", "age_s": None,
+                "status": "fresh" if pump_connected else "down"})
+    return out
 
 
 def _backoff_advice(latest, rpc):
@@ -417,6 +452,9 @@ def _snapshot():
         out = {
             "updated_at": _state["updated_at"],
             "movers_updated_at": _state["movers_updated_at"],
+            "jito_at": _state["jito_at"],
+            "sol_at": _state["sol_at"],
+            "block_at": _state["block_at"],
             "server_time": time.time(),
             "interval": _state["interval"],
             "movers_interval": _state["movers_interval"],
@@ -444,6 +482,7 @@ def _snapshot():
     out["history"] = cols
     out["history24h"] = _downsample(hist24)
     out["advise"] = _backoff_advice(out["latest"], out.get("rpc") or [])
+    out["sources"] = _source_health(out, (out.get("pump") or {}).get("pump_connected"))
     return out
 
 

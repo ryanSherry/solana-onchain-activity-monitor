@@ -142,9 +142,12 @@ The dashboard now shows a single directive under the verdict ("Hold non-critical
 sends; raise tips to ~p95 · surge ELEVATED (40) · hold ~50%"), colored by level,
 driven by the same `_backoff_advice` synthesis as C3's `/api/surge`.
 
-### C7. Per-source health / staleness  📋
-Mark when GeckoTerminal / Jito / CoinGecko / pump stream goes stale or errors, so
-the operator trusts the numbers during the moments that matter.
+### C7. Per-source health / staleness  ✅ shipped
+Each external feed (RPC/surge, Jito, GeckoTerminal movers, block data, SOL price,
+pump stream) stamps a last-good time; `server._source_health` classifies each
+fresh / stale / down (age vs 3x/6x its cadence), exposed at `/api/data` `sources`
+and rendered as a "Data source health" pill strip in Technical Details. So a
+frozen last-known-good value is *visible* rather than silently trusted.
 
 ---
 
