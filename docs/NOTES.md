@@ -199,6 +199,10 @@ self-sizes. Only revisit with a narrowly-filtered subscription.
   the cycle resolves lazily. WAL mode; DB access is effectively single-writer
   (only the surge/terminal loop writes). Legacy per-day CSVs are imported once
   then unused. See improvements.md D2.
+- **Retention (D3):** the surge loop calls `store.prune(db, --retention-days)` every
+  ~6h (and at startup) -- `DELETE WHERE ts < cutoff`. No VACUUM (locks the DB);
+  freed pages are reused by inserts so the file plateaus at ~the window. Keep the
+  window well above the 7-day baseline lookback (default 90).
 
 ---
 

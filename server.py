@@ -164,7 +164,7 @@ def _downsample(samples, n=240):
     return {"t": out_t, "surge_score": out_v}
 
 
-def _surge_loop(rpc, interval, db):
+def _surge_loop(rpc, interval, db, retention_days=0):
     """Fast loop: RPC-only (no GeckoTerminal). Drives the surge gauge + charts.
     HelloMoon handles 7 calls/tick easily, so this can run every few seconds.
     Period-accurate: sleeps interval minus the time the tick actually took."""
@@ -186,6 +186,7 @@ def _surge_loop(rpc, interval, db):
     last_sol = 0.0
     last_health = 0.0
     last_ctx = 0.0
+    last_prune = 0.0
     cur_skip = None
     while True:
         start = time.time()
@@ -253,6 +254,13 @@ def _surge_loop(rpc, interval, db):
                     with _lock:
                         _state["sol"] = sp
                 last_sol = now
+            # retention: prune old rows every ~6h (bounds DB growth). Fires on the
+            # first tick (last_prune=0), so it also cleans up at startup.
+            if retention_days and now - last_prune >= 21600:
+                last_prune = now      # set before: a prune failure still waits ~6h
+                n = store.prune(db, retention_days)
+                if n:
+                    print(f"[retention] pruned {n} rows older than {retention_days}d")
         except Exception as e:
             print(f"[warn] surge tick failed: {e}")
         time.sleep(max(0.5, interval - (time.time() - start)))
@@ -484,6 +492,9 @@ def main():
     ap.add_argument("--port", type=int, default=8888)
     ap.add_argument("--db", default=os.path.join(HERE, "data", "monitor.db"),
                     help="SQLite history DB (was per-day CSVs)")
+    ap.add_argument("--retention-days", type=int, default=90,
+                    help="prune samples older than this (bounds DB growth); "
+                         "0 = keep forever. Keep well above --tod-days / 7d.")
     args = ap.parse_args()
 
     rpc, endpoints = sources.build_pool(args.rpc)
@@ -497,7 +508,8 @@ def main():
     _state["interval"] = args.interval
     _state["movers_interval"] = args.movers_interval
     threading.Thread(target=_surge_loop,
-                     args=(rpc, args.interval, args.db), daemon=True).start()
+                     args=(rpc, args.interval, args.db, args.retention_days),
+                     daemon=True).start()
     threading.Thread(target=_movers_loop,
                      args=(args.movers_interval,), daemon=True).start()
     if args.block_interval > 0:
@@ -513,6 +525,10 @@ def main():
                                args.tod_min_days),
                          daemon=True).start()
 
+    if 0 < args.retention_days < max(args.tod_days, 7):
+        print(f"WARNING: --retention-days ({args.retention_days}) is below the "
+              f"baseline lookback ({max(args.tod_days, 7)}d) -- the time-of-day / "
+              "percentile baselines will be starved of history.")
     if endpoints == [sources.PUBLIC_RPC]:
         print("WARNING: no SOLANA_RPC configured -- using the public endpoint, "
               "which is heavily rate-limited and will make the dashboard flaky. "

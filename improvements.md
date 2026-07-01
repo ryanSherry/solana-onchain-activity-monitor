@@ -154,9 +154,12 @@ from the weighted average. (Follow-up idea: a `store.export_csv()` for the
 human-greppable use if wanted; and B1's time-of-day baseline is now a cheap SQL
 `GROUP BY`.)
 
-### D3. Data retention  📋
-Old data grows unbounded; prune beyond the baseline window (becomes a trivial
-`DELETE WHERE ts < ...` once on SQLite, D2).
+### D3. Data retention  ✅ shipped
+`store.prune(db, keep_days)` deletes samples older than `--retention-days`
+(default 90, 0=off); the surge loop runs it every ~6h (and once at startup). No
+VACUUM (it locks the DB) -- freed pages are reused by inserts, so the file
+plateaus at ~the window instead of growing forever. Kept well above the 7-day
+baseline lookback.
 
 ---
 
