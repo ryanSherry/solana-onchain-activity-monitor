@@ -107,10 +107,13 @@ the operator trusts the numbers during the moments that matter.
 
 ## D. Engineering
 
-### D1. Test suite  📋 (high leverage)
-The repo has zero tests. Add stdlib `unittest` for `RpcPool` failover/failback,
-`_surge_context` boundaries, and the Surge Index scoring. Locks in load-bearing
-logic as we keep iterating.
+### D1. Test suite  ✅ shipped
+`tests/` (stdlib `unittest`, no network, fakes injected): `RpcPool`
+failover/failback/cooldown + app-vs-transport split; `block_stats` fill/fail/
+fee/vote-filter/aggregation/skipped-slot; `SurgeTracker` missing-signal exclusion
++ baseline dedup + heat/levels; `store` round-trip/time-slices/NULL-ts/schema-add/
+CSV-import; `_surge_context` percentile/cap/is_peak boundaries. Run:
+`python3 -m unittest discover -t . -s tests`. (Next: wire into CI / a pre-push hook.)
 
 ### D2. Migrate persistence to SQLite  ✅ shipped
 `store.py` (stdlib `sqlite3`, still zero-dependency): one `data/monitor.db`,
