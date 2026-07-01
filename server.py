@@ -290,16 +290,29 @@ def _block_loop(rpc, interval):
     no gzip), so this runs on its own thread off the surge tick; the surge loop
     injects the last-known-good into each row. Preserves last value on a miss."""
     global _block_latest
+    misses = 0
     while True:
         start = time.time()
         try:
             b = sources.block_stats(rpc)
-            if b:
-                with _lock:
-                    _block_latest = b
-                    _state["block"] = b
         except Exception as e:
             print(f"[warn] block tick failed: {e}")
+            b = None
+        if b:
+            misses = 0
+            with _lock:
+                # publish a fresh dict wholesale (never mutate a published one) so
+                # the snapshot can share the ref without copying it under the lock
+                _block_latest = b
+                _state["block"] = b
+        else:
+            misses += 1
+            # stop voting frozen stats into the index once they're clearly stale:
+            # an absent value is excluded from the weighted average, not held.
+            if misses == 3:
+                with _lock:
+                    _block_latest = {}
+                    _state["block"] = {}
         time.sleep(max(2.0, interval - (time.time() - start)))
 
 
@@ -392,8 +405,11 @@ def main():
     threading.Thread(target=_movers_loop,
                      args=(args.movers_interval,), daemon=True).start()
     if args.block_interval > 0:
+        # own RpcPool so a heavy/slow getBlock failing over can't cool the surge
+        # loop's primary and flap the fast tick to a fallback
+        block_rpc = sources.build_pool(args.rpc)[0]
         threading.Thread(target=_block_loop,
-                         args=(rpc, args.block_interval), daemon=True).start()
+                         args=(block_rpc, args.block_interval), daemon=True).start()
 
     if endpoints == [sources.PUBLIC_RPC]:
         print("WARNING: no SOLANA_RPC configured -- using the public endpoint, "
@@ -404,8 +420,10 @@ def main():
     print(f"dashboard: http://{args.host}:{args.port}")
     print(f"RPC pool ({len(endpoints)}): "
           f"{', '.join(sources._node_label(e) for e in endpoints)}")
+    blk = (f"block every {args.block_interval}s (~6 MB/sample)"
+           if args.block_interval > 0 else "block sampling off")
     print(f"surge every {args.interval}s · movers every {args.movers_interval}s · "
-          f"block every {args.block_interval}s — open the URL in a browser")
+          f"{blk} — open the URL in a browser")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

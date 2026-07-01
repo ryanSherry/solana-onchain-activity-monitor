@@ -70,7 +70,7 @@ SURGE_SIGNALS = [
     ("meme_tps",           25, 1200.0),      # meme-venue submission load
     ("meme_fail_rate",     20, 0.45),        # bots racing and losing = the flood
     ("nonvote_tps",        20, 1400.0),      # overall network load
-    ("block_fill",         15, 0.55),        # block compute utilization (direct congestion)
+    ("block_fill",         15, 0.45),        # block compute utilization (direct congestion)
     ("fee_contention",     15, 0.10),        # how often there's competition to land
     ("block_fail_rate",    12, 0.20),        # network-wide non-vote tx failure rate
     ("fee_p90",            12, 3_000_000.0), # how expensive landing has become
@@ -119,11 +119,20 @@ class SurgeTracker:
     def update(self, row):
         for k, _, _ in SURGE_SIGNALS:
             v = row.get(k)
-            if v is not None and v != "":
-                try:
-                    self.hist[k].append(float(v))
-                except (TypeError, ValueError):
-                    pass
+            if v is None or v == "":
+                continue
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            d = self.hist[k]
+            # Skip an unchanged repeat. Slowly-sampled signals (block stats) are
+            # carried forward into every fast tick; counting those duplicates
+            # would cross MIN_HISTORY after 1-2 real samples and latch the
+            # rolling baseline onto the current value, collapsing its heat.
+            if d and d[-1] == fv:
+                continue
+            d.append(fv)
 
     def compute(self, row):
         """Return (index 0-100, level, components). Call BEFORE update(row)."""
@@ -265,10 +274,12 @@ def append_csv(path, row):
             # migrate in place so old + new rows stay column-aligned
             with open(path, newline="") as f:
                 old = list(csv.DictReader(f))
-            with open(path, "w", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+            tmp = path + ".tmp"                  # atomic: write a temp file, then
+            with open(tmp, "w", newline="") as f:  # os.replace -- never leave a
+                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)  # truncated day file
                 w.writeheader()
                 w.writerows({k: r.get(k) for k in CSV_FIELDS} for r in old)
+            os.replace(tmp, path)
     with open(path, "a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
         if not exists:

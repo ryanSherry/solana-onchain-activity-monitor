@@ -113,8 +113,20 @@ The repo has zero tests. Add stdlib `unittest` for `RpcPool` failover/failback,
 `_surge_context` boundaries, and the Surge Index scoring. Locks in load-bearing
 logic as we keep iterating.
 
-### D2. CSV retention  📋
-Per-day CSVs grow unbounded; prune/rotate beyond the baseline window (low priority).
+### D2. Migrate persistence to SQLite  ⏭️ (NEXT after A1)
+Replace the per-day CSVs with a single SQLite DB (`sqlite3` is stdlib -> still
+zero-dependency). Motivation surfaced while adding A1's columns: CSV schema
+evolution is painful (in-place header migration) and the in-place rewrite had a
+truncate-then-write corruption window (now mitigated with an atomic temp+replace,
+but it's a band-aid). SQLite gives `ALTER TABLE ADD COLUMN`, ACID durability, and
+lets the baselines / 7-day percentile / time-of-day baseline (B1) be SQL
+aggregations instead of "load every row into Python and sort." Touches
+`append_csv`, `read_history_rows`, `_seed_history`, `_seed_baseline`; keep a CSV
+export for the human-greppable use. Subsumes D3 (retention = `DELETE WHERE`).
+
+### D3. Data retention  📋
+Old data grows unbounded; prune beyond the baseline window (becomes a trivial
+`DELETE WHERE ts < ...` once on SQLite, D2).
 
 ---
 

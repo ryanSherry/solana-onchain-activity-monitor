@@ -487,13 +487,14 @@ def block_stats(rpc) -> dict:
     blk = used = None
     for s in range(slot, slot - 5, -1):          # step back over any skipped slots
         try:
-            blk = rpc_call(rpc, "getBlock", [s, {
+            b = rpc_call(rpc, "getBlock", [s, {
                 "encoding": "json", "maxSupportedTransactionVersion": 0,
-                "transactionDetails": "full", "rewards": False}], timeout=40)
-            used = s
-            break
+                "transactionDetails": "full", "rewards": False}], timeout=20)
         except Exception:
             continue
+        if b:                                    # some providers answer a skipped
+            blk, used = b, s                     # slot with result:null (no error)
+            break                                # -> keep stepping back instead
     txs = (blk or {}).get("transactions") or []
     if not txs:
         return {}
