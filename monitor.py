@@ -115,6 +115,13 @@ def _heat(value, center, scale) -> float:
     return max(0.0, min(100.0, z / _Z_FULL * 100.0))
 
 
+def _floor_scale(sigma, center, seed):
+    """Floor a robust sigma so a signal idling near zero keeps a sane minimum
+    spread -- keyed off the current center AND the always-positive seed."""
+    return max(sigma, _SCALE_FLOOR_FRAC * abs(center),
+               _SCALE_FLOOR_FRAC * abs(seed), _EPS)
+
+
 def level_for(index: int) -> str:
     return next(name for thr, name in _LEVELS if index >= thr)
 
@@ -135,13 +142,11 @@ class SurgeTracker:
         sensitivity -- keep both. Until the window fills, a wide prior around the
         seed so a fresh install isn't hair-triggered."""
         d = self.hist[key]
-        seed_floor = _SCALE_FLOOR_FRAC * abs(seed)
         if len(d) < MIN_HISTORY:
-            return seed, max(_SEED_SCALE_FRAC * abs(seed), seed_floor, _EPS)
+            return seed, _floor_scale(_SEED_SCALE_FRAC * abs(seed), seed, seed)
         center = statistics.median(d)
         mad = statistics.median([abs(x - center) for x in d])
-        scale = max(1.4826 * mad, _SCALE_FLOOR_FRAC * abs(center), seed_floor, _EPS)
-        return center, scale
+        return center, _floor_scale(1.4826 * mad, center, seed)
 
     def warming(self) -> bool:
         return len(self.hist["nonvote_tps"]) < MIN_HISTORY
@@ -164,14 +169,22 @@ class SurgeTracker:
                 continue
             d.append(fv)
 
-    def compute(self, row):
-        """Return (index 0-100, level, components). Call BEFORE update(row)."""
+    def compute(self, row, baselines=None):
+        """Return (index 0-100, level, components). Call BEFORE update(row).
+        `baselines` optionally overrides a signal's (center, robust_sigma) with a
+        time-of-day baseline (unusual FOR THIS HOUR); when absent for a key, the
+        rolling window is used. The seed floor is applied to either source here."""
         acc = wsum = 0.0
         comps = {}
         for key, weight, seed in SURGE_SIGNALS:
             val = row.get(key)
             present = val is not None and val != ""
-            center, scale = self.center_scale(key, seed)
+            if baselines and key in baselines:
+                center, sigma = baselines[key]
+                center, scale, source = center, _floor_scale(sigma, center, seed), "hour"
+            else:
+                center, scale = self.center_scale(key, seed)
+                source = "window"
             heat = _heat(val, center, scale)
             comps[key] = {
                 "label": SIGNAL_LABELS.get(key, key),
@@ -181,6 +194,7 @@ class SurgeTracker:
                 "value": val,
                 "baseline": round(center, 3),
                 "scale": round(scale, 3),
+                "source": source,
                 "present": present,
             }
             # a missing signal (e.g. block stats before the first sample, or a

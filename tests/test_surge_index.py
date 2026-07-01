@@ -68,6 +68,18 @@ class TrackerTest(unittest.TestCase):
             t.update({"nonvote_tps": float(v)})
         self.assertEqual(len(t.hist["nonvote_tps"]), 9)
 
+    def test_baselines_override_and_fallback(self):
+        t = monitor.SurgeTracker()
+        override = {"nonvote_tps": (1000.0, 100.0)}   # time-of-day (center, sigma)
+        _, _, comps = t.compute(
+            {"nonvote_tps": 1300.0, "meme_tps": 5000.0}, baselines=override)
+        a = comps["nonvote_tps"]
+        self.assertEqual(a["source"], "hour")         # used the override...
+        self.assertEqual(a["baseline"], 1000.0)       # ...its center
+        self.assertEqual(a["heat"], 100)              # z=(1300-1000)/100=3 -> 100
+        # a signal with no override falls back to the rolling window
+        self.assertEqual(comps["meme_tps"]["source"], "window")
+
     def test_missing_signals_do_not_deflate_index(self):
         t = monitor.SurgeTracker()
         for v in (100, 110, 90, 105, 95, 102, 98, 101):      # warm one baseline ~100

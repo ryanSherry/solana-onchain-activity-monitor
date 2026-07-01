@@ -85,6 +85,24 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.import_csvs(self.db, self.dir), 0)     # no-op 2nd time
         self.assertEqual(len(store.read_recent(self.db, 10)), 2)
 
+    def test_hourly_baselines(self):
+        now = int(time.time())
+        base = (now // 3600) * 3600 - 1800          # mid of the PREVIOUS UTC hour
+        iso = lambda e: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))
+        hour_a = time.gmtime(base).tm_hour
+        hour_b = time.gmtime(base - 3600).tm_hour
+        for i in range(80):                          # 80 in hour A (>= min 60)
+            store.append(self.db, self._row(iso(base - i), 10 + (i % 3)))  # 10..12
+        for i in range(5):                           # 5 in hour B (< min 60)
+            store.append(self.db, self._row(iso(base - 3600 - i), 99))
+        tod = store.hourly_baselines(self.db, ["surge_score"], days=7, min_samples=60)
+        hrs = tod.get("surge_score", {})
+        self.assertIn(hour_a, hrs)                    # enough samples -> bucket
+        self.assertNotIn(hour_b, hrs)                # too few -> filtered out
+        center, sigma = hrs[hour_a]
+        self.assertAlmostEqual(center, 11, delta=1)  # median of 10..12
+        self.assertGreaterEqual(sigma, 0.0)
+
     def test_import_skips_corrupt_file(self):
         with open(os.path.join(self.dir, "activity_bad.csv"), "wb") as f:
             f.write(b"timestamp_utc,surge_score\n\xff\xfe bad\x00\n")   # non-utf8 + NUL

@@ -66,6 +66,13 @@ _pump = None
 # loop and snapshot under _lock.
 _block_latest = {}
 
+# Time-of-day baselines: {signal: {utc_hour: (center, robust_sigma)}}, rebuilt
+# from the SQLite history on a slow cadence. The surge loop passes the current
+# hour's slice to compute() so heat is "unusual FOR THIS HOUR" (falls back to the
+# rolling window for any signal/hour without enough history). Published wholesale
+# under _lock; read (never mutated) by the surge loop.
+_tod_baselines = {}
+
 # Trailing-week surge_score distribution -> "how unusual is right now?" percentile.
 # Touched only by the single surge loop thread (the snapshot reads the derived
 # _state["surge_context"], never these), so no lock is needed here.
@@ -199,7 +206,13 @@ def _surge_loop(rpc, interval, db):
             for k in ("block_fill", "block_fail_rate",
                       "block_fee_cu_p50", "block_fee_cu_p90"):
                 row[k] = bl.get(k)
-            score, level, comps = tracker.compute(row)
+            # baseline for THIS UTC hour (falls back to the rolling window per
+            # signal when that hour lacks enough history)
+            hour = time.gmtime().tm_hour
+            with _lock:
+                tod = _tod_baselines
+            cur = {s: hrs[hour] for s, hrs in tod.items() if hour in hrs}
+            score, level, comps = tracker.compute(row, baselines=cur)
             row["surge_score"], row["surge_level"] = score, level
 
             store.append(db, row)
@@ -292,6 +305,22 @@ def _block_loop(rpc, interval, samples):
         time.sleep(max(2.0, interval - (time.time() - start)))
 
 
+def _tod_loop(db, days, min_samples, interval=1800):
+    """Slow loop: rebuild the per-signal, per-hour baselines from history (they
+    drift only over days). Computes once immediately, then every `interval`."""
+    global _tod_baselines
+    signals = [k for k, _, _ in monitor.SURGE_SIGNALS]
+    while True:
+        start = time.time()
+        try:
+            tod = store.hourly_baselines(db, signals, days=days, min_samples=min_samples)
+            with _lock:
+                _tod_baselines = tod
+        except Exception as e:
+            print(f"[warn] time-of-day baseline refresh failed: {e}")
+        time.sleep(max(60.0, interval - (time.time() - start)))
+
+
 def _snapshot():
     with _lock:
         latest = dict(_state["latest"])
@@ -369,6 +398,12 @@ def main():
     ap.add_argument("--block-samples", type=int, default=3,
                     help="blocks aggregated per sample (more = less noise, more "
                          "bandwidth: ~6 MB x this, per --block-interval)")
+    ap.add_argument("--tod-days", type=int, default=7,
+                    help="days of history for the time-of-day baseline "
+                         "('unusual for this hour'); 0 = rolling window only")
+    ap.add_argument("--tod-min-samples", type=int, default=60,
+                    help="min samples in an hour bucket before it overrides the "
+                         "rolling window for that signal/hour")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8888)
     ap.add_argument("--db", default=os.path.join(HERE, "data", "monitor.db"),
@@ -395,6 +430,10 @@ def main():
         block_rpc = sources.build_pool(args.rpc)[0]
         threading.Thread(target=_block_loop,
                          args=(block_rpc, args.block_interval, args.block_samples),
+                         daemon=True).start()
+    if args.tod_days > 0:
+        threading.Thread(target=_tod_loop,
+                         args=(args.db, args.tod_days, args.tod_min_samples),
                          daemon=True).start()
 
     if endpoints == [sources.PUBLIC_RPC]:

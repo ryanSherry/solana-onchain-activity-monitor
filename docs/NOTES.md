@@ -170,6 +170,14 @@ self-sizes. Only revisit with a narrowly-filtered subscription.
   calibrating against the lander's actual throttling is the highest-value next
   step. `compute()` excludes a **missing** signal (None) from the weighted average
   so an absent source can't deflate the score.
+- **Time-of-day baseline (B1b):** when the SQLite history has enough samples for
+  the current UTC hour (`store.hourly_baselines`, refreshed ~half-hourly by
+  `_tod_loop`), a signal's center/scale come from that hour's multi-day
+  distribution instead of the last ~10 min — heat becomes "unusual FOR THIS HOUR."
+  This also fixes B1's ramp self-masking / latching (a surge now is diluted across
+  many days of the same hour, not measured against its own recent window). Falls
+  back per signal/hour to the rolling window below `--tod-min-samples`.
+  `comps[...]["source"]` is `"hour"` or `"window"`.
 - **Persistence** is `store.py` (SQLite, stdlib — still zero-dep). One
   `data/monitor.db`; schema is derived from `CSV_FIELDS` with `ALTER TABLE ADD
   COLUMN` evolution (adding a signal is a one-liner, no file migration), appends

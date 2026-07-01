@@ -18,6 +18,7 @@ import csv as _csv
 import glob
 import os
 import sqlite3
+import statistics
 import threading
 import time
 
@@ -140,6 +141,43 @@ def read_scores_since(path, seconds):
         return [(r[0], r[1]) for r in c.execute(
             "SELECT ts, surge_score FROM samples "
             "WHERE ts >= ? AND surge_score IS NOT NULL ORDER BY ts ASC", (cutoff,))]
+
+
+def hourly_baselines(path, signals, days=7, min_samples=60):
+    """Per-signal, per-UTC-hour robust baseline from the trailing `days` of
+    history: {signal: {hour: (center, robust_sigma)}} where center=median and
+    robust_sigma=1.4826*MAD. A bucket is included only with >= min_samples points.
+    Powers the 'unusual FOR THIS HOUR' baseline; the per-signal seed floor is
+    applied later in monitor.compute (it needs the seed). One query per refresh."""
+    signals = list(signals)
+    cutoff = int(time.time() - days * 86400)
+    with _lock:
+        c = _conn(path)
+        rows = c.execute(
+            "SELECT ts, %s FROM samples WHERE ts >= ?" % _quoted(signals),
+            (cutoff,)).fetchall()
+    buckets = {s: [[] for _ in range(24)] for s in signals}
+    for r in rows:
+        ts = r["ts"]
+        if ts is None:
+            continue
+        h = time.gmtime(ts).tm_hour
+        for s in signals:
+            v = r[s]
+            if v is not None:
+                buckets[s][h].append(v)
+    out = {}
+    for s in signals:
+        hours = {}
+        for h in range(24):
+            vals = buckets[s][h]
+            if len(vals) >= min_samples:
+                center = statistics.median(vals)
+                mad = statistics.median([abs(x - center) for x in vals])
+                hours[h] = (center, 1.4826 * mad)
+        if hours:
+            out[s] = hours
+    return out
 
 
 def import_csvs(path, csv_dir):
