@@ -24,6 +24,7 @@ import threading
 import time
 import urllib.request
 import urllib.error
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -167,6 +168,12 @@ def _rpc_call_one(url: str, method: str, params=None, timeout: int = 20):
     return data["result"]
 
 
+def _is_ratelimit(exc) -> bool:
+    """True for an HTTP 429 (Too Many Requests) -- the rate-limit signal the
+    whole tool exists to warn about."""
+    return isinstance(exc, urllib.error.HTTPError) and exc.code == 429
+
+
 class RpcPool:
     """Ordered RPC endpoints with automatic failover and self-healing failback.
 
@@ -183,12 +190,15 @@ class RpcPool:
     """
     BASE_COOLDOWN = 20.0   # seconds for a first failure
     MAX_COOLDOWN = 300.0   # cap after repeated failures
+    HEALTH_WINDOW = 500    # recent calls kept per endpoint for latency/error stats
 
     def __init__(self, urls, timeout: int = 20):
         urls = [u for u in dict.fromkeys(urls) if u]
         if not urls:
             raise ValueError("RpcPool needs at least one endpoint")
-        self._eps = [{"url": u, "failed_until": 0.0, "streak": 0} for u in urls]
+        self._eps = [{"url": u, "failed_until": 0.0, "streak": 0,
+                      "calls": deque(maxlen=self.HEALTH_WINDOW)}  # (latency_s, status)
+                     for u in urls]
         self._timeout = timeout
         self._lock = threading.Lock()
         self._active = urls[0]
@@ -206,24 +216,22 @@ class RpcPool:
     def call(self, method, params=None, timeout=None):
         last_exc = None
         for e in self._ordered(time.time()):
+            t0 = time.time()
             try:
                 result = _rpc_call_one(e["url"], method, params,
                                        timeout or self._timeout)
-                with self._lock:
-                    e["streak"] = 0
-                    e["failed_until"] = 0.0
-                    if self._active != e["url"]:
-                        prev, self._active = self._active, e["url"]
-                        print(f"[rpc] switched to {_node_label(e['url'])} "
-                              f"(from {_node_label(prev)})", flush=True)
-                return result
             except RpcAppError:
-                # request-level rejection, not a node-health signal: don't cool
-                # or fail over -- the caller's try/except handles it.
+                # request-level rejection, not a node-health signal: record it but
+                # don't cool or fail over -- the caller's try/except handles it.
+                with self._lock:
+                    e["calls"].append((time.time() - t0, "app"))
                 raise
             except Exception as exc:
                 last_exc = exc
+                dt = time.time() - t0
+                status = "ratelimited" if _is_ratelimit(exc) else "error"
                 with self._lock:
+                    e["calls"].append((dt, status))
                     now = time.time()
                     # Only escalate on a genuinely fresh failure -- concurrent
                     # siblings in the same tick must not inflate the streak.
@@ -234,20 +242,49 @@ class RpcPool:
                     e["failed_until"] = now + backoff
                 print(f"[rpc] {_node_label(e['url'])} failed on {method}: {exc} "
                       f"-> cooldown {int(backoff)}s", flush=True)
+                continue
+            with self._lock:
+                e["calls"].append((time.time() - t0, "ok"))
+                e["streak"] = 0
+                e["failed_until"] = 0.0
+                if self._active != e["url"]:
+                    prev, self._active = self._active, e["url"]
+                    print(f"[rpc] switched to {_node_label(e['url'])} "
+                          f"(from {_node_label(prev)})", flush=True)
+            return result
         raise last_exc if last_exc else RuntimeError("no RPC endpoints")
 
     def status(self):
-        """Per-endpoint health snapshot for /api/data (tokens masked)."""
+        """Per-endpoint health snapshot for /api/data (tokens masked): failover
+        state + recent latency percentiles and error / rate-limit rates -- the
+        earliest read on 'is our own RPC path degrading / about to be throttled'."""
         now = time.time()
+
+        def pct(vals, p):
+            return round(vals[min(len(vals) - 1, int(p * len(vals)))] * 1000) if vals else None
+
         with self._lock:
-            return [{
-                "endpoint": _mask_url(e["url"]),
-                "region": _region(e["url"]),         # short code (FRA/AMS/NY) or null
-                "priority": i,                       # 0 = primary
-                "healthy": e["failed_until"] <= now,
-                "cooldown_s": max(0, math.ceil(e["failed_until"] - now)),
-                "active": e["url"] == self._active,
-            } for i, e in enumerate(self._eps)]
+            out = []
+            for i, e in enumerate(self._eps):
+                calls = list(e["calls"])
+                n = len(calls)
+                oks = sorted(lat for lat, s in calls if s == "ok")
+                errs = sum(1 for _, s in calls if s == "error")
+                r429 = sum(1 for _, s in calls if s == "ratelimited")
+                out.append({
+                    "endpoint": _mask_url(e["url"]),
+                    "region": _region(e["url"]),     # short code (FRA/AMS/NY) or null
+                    "priority": i,                   # 0 = primary
+                    "healthy": e["failed_until"] <= now,
+                    "cooldown_s": max(0, math.ceil(e["failed_until"] - now)),
+                    "active": e["url"] == self._active,
+                    "lat_p50_ms": pct(oks, 0.50),
+                    "lat_p99_ms": pct(oks, 0.99),
+                    "err_rate": round(errs / n, 3) if n else None,
+                    "rate_limited": round(r429 / n, 3) if n else None,
+                    "samples": n,
+                })
+            return out
 
 
 def rpc_call(endpoint, method: str, params=None, timeout: int = 20):

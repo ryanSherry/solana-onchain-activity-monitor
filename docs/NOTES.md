@@ -89,6 +89,12 @@ newborns). That's why the index uses **launch rate**, not a websocket trade rate
   account and pool the non-zero floors instead.
 - **At very high rates 1000 sigs span <1 slot** — floor the span at 1 slot so the
   busiest venue (pumpswap) still yields a rate instead of dropping out.
+- **RPC self-health (C2):** `RpcPool.call` times every request and records
+  ok/429/error per endpoint (rolling `HEALTH_WINDOW`); `status()` exposes p50/p99
+  latency + error/429 rate. 429 detection is `HTTPError.code == 429`. This is our
+  *own* path's health — distinct from the venue fail rate (the network's) — and
+  the earliest throttle warning. Only the *active* node accrues samples (others
+  show n=0 until a failover routes calls to them).
 
 ### RPC failover (`sources.RpcPool`)
 

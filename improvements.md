@@ -94,10 +94,15 @@ logistic nowcast — P(landing trouble in next 10 min) — on CSV history. All s
 Push to Slack/Discord webhook (stdlib `urllib` POST) on: surge → Elevated/Surging,
 skip-rate spike, RPC failover. Turns a passive dashboard into an active warning.
 
-### C2. RPC self-health  📋
-`RpcPool.call` already sees every error/latency — record per-node **response latency
-(p50/p99)** and **429/error rate**, expose as a panel + alert. The earliest, most
-direct read on "are we about to be throttled."
+### C2. RPC self-health  ✅ shipped
+`RpcPool` records every call's latency + outcome (ok / HTTP-429 / error) in a
+per-endpoint rolling window (`HEALTH_WINDOW=500`); `status()` exposes **p50/p99
+latency**, **error rate**, and **rate-limit (429) rate** per node at `/api/data`
+`rpc[]`, rendered as an "RPC endpoint health" panel in Technical Details. The
+earliest, most direct read on "is our own path degrading / about to be throttled."
+App errors (`RpcAppError`) are recorded but not counted as node errors.
+**Follow-up:** feed rising latency / 429 into alerting (C1) and the backoff
+signal (C3).
 
 ### C3. Machine-readable backoff signal  📋
 `advise_backoff` boolean (or `/api/surge`) the lander polls to auto-throttle.

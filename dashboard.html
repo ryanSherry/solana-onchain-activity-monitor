@@ -145,6 +145,13 @@
   .venue .vbar{height:16px;background:#0b0a12;border-radius:5px;overflow:hidden;border:1px solid var(--line)}
   .venue .vfill{height:100%;background:var(--blue);border-radius:5px}
   .venue .vmeta{font-size:12px;color:var(--mut);text-align:right;font-variant-numeric:tabular-nums}
+  .rpch{display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:10px;
+    margin:7px 0;font-size:12px}
+  .rpch .rn{font-weight:700;font-family:var(--mono)}
+  .rpch .rn .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+    margin-right:5px;vertical-align:middle}
+  .rpch .rm{color:var(--mut);font-variant-numeric:tabular-nums}
+  .rpch .rs{text-align:right;color:var(--mut);white-space:nowrap}
 
   /* ---- mobile (tailnet has phones; glanceability anywhere is the point) ---- */
   @media (max-width:720px){
@@ -252,6 +259,8 @@
       <div class="grid" id="cards"></div>
       <h2 style="font-size:12px;color:var(--mut);margin:6px 0 10px;text-transform:uppercase;letter-spacing:.5px">DEX venue trade &amp; failure rate (top 9 by tx volume)</h2>
       <div id="venues"></div>
+      <h2 style="font-size:12px;color:var(--mut);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.5px">RPC endpoint health <span class="info" data-tip="Our OWN RPC path: per-node response latency (p50/p99), error rate, and rate-limit (HTTP 429) rate over recent calls. Rising latency or 429s here is the earliest warning that the lander is about to get throttled.">?</span></h2>
+      <div id="rpc-health"></div>
     </div>
   </details>
 </div>
@@ -691,6 +700,21 @@ function render(j){
       <div class="vmeta">${fmt(d.tps,'int')} tx/s · <span style="color:${fc}">${fp==null?'—':fp.toFixed(0)+'% fail'}</span></div></div>`;
   }
 
+  // RPC endpoint health — our OWN path (latency + error/429), earliest throttle warning
+  const rpch=document.getElementById('rpc-health');
+  if(rpch){
+    rpch.innerHTML=(j.rpc||[]).map(e=>{
+      const nm=e.region||e.endpoint.split('.')[0];
+      const dot=!e.healthy?'#f2a93b':(e.active?'#14f195':'var(--mut)');
+      const lat=e.lat_p50_ms==null?'—':`${e.lat_p50_ms}/${e.lat_p99_ms==null?'—':e.lat_p99_ms} ms`;
+      const ep=e.err_rate==null?0:e.err_rate*100, rp=e.rate_limited==null?0:e.rate_limited*100;
+      const err=e.err_rate==null?'':` · <span style="color:${ep>=10?'#ff4d6d':'var(--mut)'}">${ep.toFixed(1)}% err</span>`;
+      const r429=e.rate_limited==null?'':` · <span style="color:${rp>=2?'#ff4d6d':'var(--mut)'}">${rp.toFixed(1)}% 429</span>`;
+      const state=e.active?'active':(e.healthy?`p${e.priority}`:`cooldown ${e.cooldown_s}s`);
+      return `<div class="rpch"><div class="rn"><span class="dot" style="background:${dot}"></span>${nm}</div>`
+        +`<div class="rm">p50/p99 ${lat}${err}${r429}</div><div class="rs">${state}</div></div>`;
+    }).join('');
+  }
   // pump.fun stream health -> folded into the Launches/min card (in details)
   const p=j.pump||{};
   const ue=document.getElementById('u_pump_launches_min');
