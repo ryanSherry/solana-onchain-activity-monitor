@@ -54,6 +54,21 @@ class BlockStatsTest(unittest.TestCase):
         self.assertEqual(r["block_fee_cu_p50"], 1000000)
         self.assertEqual(r["block_fee_cu_p90"], 1000000)
 
+    def test_fee_per_cu_percentiles_and_multisig(self):
+        # 4 nonvote txs with DISTINCT priority-fee/CU so p50 != p90, plus a 2-sig
+        # tx to exercise the per-signature base-fee strip (5000 * len(sigs)).
+        txs = [
+            tx(100000, 5000 + 100000, sigs=1),         # priority 100000 -> 1e6 µlam/CU
+            tx(100000, 5000 + 200000, sigs=1),         # -> 2e6
+            tx(100000, 5000 + 300000, sigs=1),         # -> 3e6
+            tx(100000, 10000 + 400000, sigs=2),        # base 5000*2=10000; 400000 -> 4e6
+        ]
+        self._patch({1000: {"transactions": txs}})
+        r = sources.block_stats("u", blocks=1)
+        # sorted [1e6,2e6,3e6,4e6]: p50 idx int(.5*4)=2 -> 3e6; p90 idx int(.9*4)=3 -> 4e6
+        self.assertEqual(r["block_fee_cu_p50"], 3_000_000)
+        self.assertEqual(r["block_fee_cu_p90"], 4_000_000)   # multisig priced right
+
     def test_multi_block_aggregation_pools_txs(self):
         blk = {"transactions": [tx(100000, 5000), tx(100000, 5000, err={"e": 1})]}
         self._patch({1000: blk, 999: blk, 998: blk})

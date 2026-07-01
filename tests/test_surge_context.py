@@ -27,11 +27,13 @@ class SurgeContextTest(unittest.TestCase):
         self._dist(list(range(100)))
         self.assertIsNone(server._surge_context(None))
 
-    def test_midrange_percentile(self):
-        self._dist(list(range(100)))               # 0..99
+    def test_midrange_percentile_is_exact(self):
+        self._dist(list(range(100)))               # 0..99, n=100
         c = server._surge_context(50)
         self.assertFalse(c["is_peak"])
-        self.assertTrue(45 <= c["percentile"] <= 55)
+        # EXACT 50: bisect_left counts the 50 values strictly below 50. Reverting
+        # to bisect_right would give 51 here -- the whole point of the fix.
+        self.assertEqual(c["percentile"], 50)
         self.assertEqual(c["max"], 99)
 
     def test_cap_at_99_on_tie(self):

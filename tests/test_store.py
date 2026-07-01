@@ -4,6 +4,7 @@ a corrupt file)."""
 import contextlib
 import io
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -24,7 +25,10 @@ class StoreTest(unittest.TestCase):
         store._conns.clear()          # isolate the connection cache per test
 
     def tearDown(self):
+        for c in store._conns.values():
+            c.close()
         store._conns.clear()
+        shutil.rmtree(self.dir, ignore_errors=True)
 
     def _row(self, ts, score, **kw):
         r = {"timestamp_utc": ts, "surge_score": score, "surge_level": "CALM"}
@@ -91,6 +95,8 @@ class StoreTest(unittest.TestCase):
             n = store.import_csvs(self.db, self.dir)                    # must NOT raise
         self.assertEqual(n, 1)                                         # good file only
         self.assertIn("skipping unreadable", out.getvalue())           # warned once
+        # and NO phantom rows from the corrupt file were persisted
+        self.assertEqual(len(store.read_recent(self.db, 10)), 1)
 
 
 if __name__ == "__main__":

@@ -83,6 +83,32 @@ class RpcPoolTest(unittest.TestCase):
         # rpc_call with a plain URL string dispatches straight to _rpc_call_one
         self.assertEqual(sources.rpc_call(self.urls["A"], "m"), "ok-A")
 
+    def test_backoff_escalates_across_cooldown_cycles(self):
+        self.mode["A"] = "transport"
+        p = sources.RpcPool([self.urls["A"]])          # single node: always retried
+        p.BASE_COOLDOWN = 1.0
+        with self.assertRaises(ConnectionError):
+            p.call("m")                                # 1st failure: streak 1, ~1s
+        cd1 = p.status()[0]["cooldown_s"]
+        time.sleep(1.1)                                # cooldown lapses -> next is a probe
+        with self.assertRaises(ConnectionError):
+            p.call("m")                                # 2nd failure: streak 2, ~2s
+        cd2 = p.status()[0]["cooldown_s"]
+        self.assertEqual(cd1, 1)
+        self.assertGreater(cd2, cd1)                   # exponential backoff engaged
+
+    def test_concurrent_failures_do_not_inflate_streak(self):
+        self.mode["A"] = "transport"
+        p = sources.RpcPool([self.urls["A"]])
+        p.BASE_COOLDOWN = 1.0
+        with self.assertRaises(ConnectionError):
+            p.call("m")                                # streak 1, cooldown ~1s
+        with self.assertRaises(ConnectionError):
+            p.call("m")                                # immediate retry, still cooling
+        # the guard must NOT bump the streak for a same-window failure -> stays ~1s,
+        # not escalated to ~2s
+        self.assertLessEqual(p.status()[0]["cooldown_s"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
