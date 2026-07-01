@@ -1,0 +1,164 @@
+"""store.py: append/read round-trip, time-range slices, NULL-ts exclusion,
+schema evolution (ALTER ADD COLUMN), and legacy-CSV import (idempotent + skips
+a corrupt file)."""
+import contextlib
+import io
+import os
+import shutil
+import tempfile
+import time
+import unittest
+
+from . import _helper  # noqa: F401
+import monitor
+import store
+
+
+def _now_ts():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+class StoreTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.db = os.path.join(self.dir, "t.db")
+        store._conns.clear()          # isolate the connection cache per test
+
+    def tearDown(self):
+        for c in store._conns.values():
+            c.close()
+        store._conns.clear()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _row(self, ts, score, **kw):
+        r = {"timestamp_utc": ts, "surge_score": score, "surge_level": "CALM"}
+        r.update(kw)
+        return r
+
+    def test_append_read_roundtrip_and_coercion(self):
+        store.append(self.db, self._row(_now_ts(), 5, nonvote_tps=1200.5))
+        rows = store.read_recent(self.db, 10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["surge_score"], 5.0)        # numeric coerced
+        self.assertEqual(rows[0]["nonvote_tps"], 1200.5)
+        self.assertEqual(rows[0]["surge_level"], "CALM")     # text preserved
+
+    def test_read_since_window(self):
+        store.append(self.db, self._row(_now_ts(), 7))                 # recent
+        store.append(self.db, self._row("2020-01-01T00:00:00Z", 3))    # old
+        rows = store.read_since(self.db, 3600)
+        self.assertEqual([r["surge_score"] for r in rows], [7.0])      # old excluded
+
+    def test_read_scores_since_excludes_null_score(self):
+        store.append(self.db, self._row(_now_ts(), 8))
+        store.append(self.db, self._row(_now_ts(), None))             # no surge_score
+        pairs = store.read_scores_since(self.db, 3600)
+        self.assertEqual([s for _, s in pairs], [8.0])
+        self.assertTrue(all(isinstance(t, int) for t, _ in pairs))    # epoch ints
+
+    def test_read_recent_excludes_null_ts(self):
+        store.append(self.db, self._row(_now_ts(), 5))
+        store.append(self.db, self._row("not-a-timestamp", 9))       # -> ts NULL
+        rows = store.read_recent(self.db, 10)
+        self.assertEqual([r["surge_score"] for r in rows], [5.0])     # NULL-ts gone
+
+    def test_schema_add_column(self):
+        store.append(self.db, self._row(_now_ts(), 5))               # table created
+        orig = monitor.CSV_FIELDS
+        try:
+            monitor.CSV_FIELDS = orig + ["new_signal"]               # a new column
+            store._conns.clear()                                     # force re-ensure
+            store.append(self.db, {"timestamp_utc": _now_ts(),
+                                   "surge_score": 6, "new_signal": 1.5})
+            rows = store.read_recent(self.db, 10)
+            self.assertIn("new_signal", rows[-1])
+            self.assertEqual(rows[-1]["new_signal"], 1.5)
+        finally:
+            monitor.CSV_FIELDS = orig
+            store._conns.clear()
+
+    def test_import_csvs_idempotent(self):
+        path = os.path.join(self.dir, "activity_20260101.csv")
+        with open(path, "w", newline="") as f:
+            f.write("timestamp_utc,surge_score\n%s,5\n%s,6\n" % (_now_ts(), _now_ts()))
+        self.assertEqual(store.import_csvs(self.db, self.dir), 2)
+        self.assertEqual(store.import_csvs(self.db, self.dir), 0)     # no-op 2nd time
+        self.assertEqual(len(store.read_recent(self.db, 10)), 2)
+
+    def test_incidents_roundtrip(self):
+        inc = store.add_incident(self.db, "  got 429s  ", 45.0, "ELEVATED")
+        self.assertEqual(inc["note"], "got 429s")            # trimmed
+        self.assertEqual(inc["surge_score"], 45.0)
+        self.assertIsInstance(inc["ts"], int)
+        store.add_incident(self.db, "", 5.0, "CALM")         # empty note -> None
+        got = store.recent_incidents(self.db, 3600)
+        self.assertEqual(len(got), 2)
+        self.assertIsNone(got[-1]["note"])                   # blank stored as NULL
+
+    def test_incident_note_coercion_and_sanitize(self):
+        self.assertEqual(store.add_incident(self.db, 123, 5.0, "CALM")["note"], "123")  # non-str
+        bad = store.add_incident(self.db, "<script>x</script>", 5.0, "CALM")["note"]
+        self.assertNotIn("<", bad)                           # angle brackets stripped
+        self.assertNotIn(">", bad)
+        self.assertIsNone(store.add_incident(self.db, None, 5.0, "CALM")["note"])
+
+    def test_incidents_survive_prune(self):
+        # incidents are ground truth -- prune only touches samples, never incidents
+        store.add_incident(self.db, "keep me", 50.0, "ELEVATED")
+        store.prune(self.db, keep_days=1)
+        self.assertEqual(len(store.recent_incidents(self.db, 86400)), 1)
+
+    def test_prune(self):
+        now = int(time.time())
+        iso = lambda e: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))
+        store.append(self.db, self._row(iso(now - 100 * 86400), 1))  # 100 days old
+        store.append(self.db, self._row(iso(now - 1 * 86400), 2))    # 1 day old
+        store.append(self.db, self._row(iso(now), 3))                # now
+        store.append(self.db, self._row("bad-timestamp", 7))        # -> ts NULL
+        self.assertEqual(store.prune(self.db, keep_days=90), 2)      # 100d row + NULL-ts
+        kept = sorted(r["surge_score"] for r in store.read_recent(self.db, 10))
+        self.assertEqual(kept, [2.0, 3.0])                           # recent rows kept
+        null_left = store._conn(self.db).execute(
+            "SELECT COUNT(*) FROM samples WHERE ts IS NULL").fetchone()[0]
+        self.assertEqual(null_left, 0)                              # NULL-ts pruned too
+        self.assertEqual(store.prune(self.db, 0), 0)                 # 0 = keep forever
+
+    def test_hourly_baselines(self):
+        now = int(time.time())
+        base = (now // 3600) * 3600 - 1800          # mid of the PREVIOUS UTC hour
+        iso = lambda e: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(e))
+        hour_a = time.gmtime(base).tm_hour
+        hour_b = time.gmtime(base - 3600).tm_hour
+        # hour A: 2 distinct days (today + yesterday, same UTC hour) -> qualifies
+        for i in range(40):
+            store.append(self.db, self._row(iso(base - i), 10 + (i % 3)))          # today
+        for i in range(40):
+            store.append(self.db, self._row(iso(base - 86400 - i), 10 + (i % 3)))  # yesterday
+        # hour B: 80 samples but only ONE day -> fails the min_days=2 guard
+        for i in range(80):
+            store.append(self.db, self._row(iso(base - 3600 - i), 99))
+        tod = store.hourly_baselines(self.db, ["surge_score"],
+                                     days=7, min_samples=60, min_days=2)
+        hrs = tod.get("surge_score", {})
+        self.assertIn(hour_a, hrs)                    # 2 days x 40 -> bucket
+        self.assertNotIn(hour_b, hrs)                # 80 samples but 1 day -> filtered
+        center, sigma = hrs[hour_a]
+        self.assertAlmostEqual(center, 11, delta=1)  # median of 10..12
+        self.assertGreaterEqual(sigma, 0.0)
+
+    def test_import_skips_corrupt_file(self):
+        with open(os.path.join(self.dir, "activity_bad.csv"), "wb") as f:
+            f.write(b"timestamp_utc,surge_score\n\xff\xfe bad\x00\n")   # non-utf8 + NUL
+        good = os.path.join(self.dir, "activity_20260102.csv")
+        with open(good, "w") as f:
+            f.write("timestamp_utc,surge_score\n%s,4\n" % _now_ts())
+        with contextlib.redirect_stdout(io.StringIO()) as out:         # mutes the warn
+            n = store.import_csvs(self.db, self.dir)                    # must NOT raise
+        self.assertEqual(n, 1)                                         # good file only
+        self.assertIn("skipping unreadable", out.getvalue())           # warned once
+        # and NO phantom rows from the corrupt file were persisted
+        self.assertEqual(len(store.read_recent(self.db, 10)), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

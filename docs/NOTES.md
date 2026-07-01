@@ -89,6 +89,34 @@ newborns). That's why the index uses **launch rate**, not a websocket trade rate
   account and pool the non-zero floors instead.
 - **At very high rates 1000 sigs span <1 slot** — floor the span at 1 slot so the
   busiest venue (pumpswap) still yields a rate instead of dropping out.
+- **Venue drift (A5):** `block_stats` tallies the busiest programs by non-vote tx
+  count from the blocks it already fetches (top-level instruction `programIdIndex`
+  resolved through static + ALT-loaded keys; `_INFRA_PROGRAMS` excluded), returned
+  as per-sample `venue_counts`. The **server aggregates ~10 samples**
+  (`_aggregate_venue_top`) into a stable `venue_top` — one ~1s block sample is far
+  too noisy to call "drift." `HOT_VENUES` is static and meme activity migrates, so
+  untracked programs (no `venue` name) are shown **amber, informational** — NOT an
+  auto-alert. Deliberately so: aggregators (Jupiter) and perps are perennially busy
+  yet must never be added (they CPI *into* tracked venues, so adding them
+  double-counts), and a floor-based "as busy as a tracked venue" flag false-fires
+  on them constantly (alarm fatigue) and mis-fires at the edges (no tracked venue
+  in the top-12 = the *max* drift case, yet a min()-floor would suppress it). So
+  the operator judges a *persistently* high untracked program and validates it per
+  the "Adding a DEX venue" rule. Top-level-only counting under-counts a tracked
+  venue reached via an aggregator CPI — fine for "is it on our list?". Free —
+  reuses the getBlock data.
+- **RPC self-health (C2):** `RpcPool.call` times every request and records
+  ok/429/error per endpoint (rolling `HEALTH_WINDOW`); `status()` exposes p50/p99
+  latency + error/429 rate. 429 detection is `HTTPError.code == 429`. This is our
+  *own* path's health — distinct from the venue fail rate (the network's) — and
+  the earliest throttle warning. Only the *active* node accrues samples (others
+  show n=0 until a failover routes calls to them).
+- **Backoff advice (C3/C6):** `server._backoff_advice` folds surge + RPC self-health
+  (429/latency) + skip rate into one verdict via **max-of-signals** (any axis in
+  danger -> back off; `reason` names the driver). Machine-readable at `/api/surge`
+  (`advise_backoff`, `throttle_factor` 0-1, `level`, `action`) for a lander to poll
+  and auto-throttle; the same object drives the dashboard's "recommended action"
+  line. Thresholds are a prior (calibrate via C5).
 
 ### RPC failover (`sources.RpcPool`)
 
@@ -143,17 +171,63 @@ self-sizes. Only revisit with a narrowly-filtered subscription.
 
 ## 6. Architecture
 
-- **Two background loops** (`server.py`): a fast **surge loop** (RPC, ~5s,
-  no GeckoTerminal) and a slow **movers loop** (GeckoTerminal, ~15s). Decoupled
-  so the gauge feels live while staying under GeckoTerminal's ~30/min limit.
-  Jito 10s · skip rate 15s · SOL price 45s. All period-accurate (sleep =
-  interval − work).
+- **Background loops** (`server.py`): a fast **surge loop** (RPC, ~5s, no
+  GeckoTerminal), a slow **movers loop** (GeckoTerminal, ~15s), and a slow
+  **block loop** (`getBlock`, ~30s). Decoupled so the gauge feels live while
+  staying under GeckoTerminal's ~30/min limit. Jito 10s · skip rate 15s · SOL
+  price 45s. All period-accurate (sleep = interval − work). The block loop uses
+  its **own RpcPool** (getBlock is ~6 MB × `--block-samples` and heavy — a slow
+  one must not cool the surge loop's primary and flap the fast tick).
+- **Block signals** (`sources.block_stats`): pool the last N blocks (default 3)
+  because one block is a very noisy estimate (fill swings 0.4→1.0 block to block).
+  Vote txs (~half the block) are excluded from the failure/fee figures. Only
+  **fill %** truly needs `getBlock`; failure and fee-per-CU have cheaper,
+  better-sampled sources (`getSignaturesForAddress`, `getRecentPrioritizationFees`),
+  so the block fee-per-CU is displayed but kept OUT of the weighted index.
 - **Last-known-good** on transient source misses (movers, venue data) so the UI
   never blanks; per-section freshness tells the truth when a source lags.
+- **Source health (C7):** each feed stamps a last-good time (`*_at` in `_state`);
+  `_source_health` marks it fresh/stale/down (age vs 3x/6x cadence, in `_SOURCES`),
+  surfaced at `/api/data` `sources` + a pill strip. So a *frozen* last-known-good
+  value is visible, not silently trusted. pump is by its websocket-connected flag.
 - **Surge Index** lives in `monitor.py` (`SurgeTracker`, `SURGE_SIGNALS`,
-  `_LEVELS`). Weights/thresholds are a **reasoned prior, NOT calibrated** to real
-  rate-limit events — calibrating against the lander's actual throttling is the
-  single highest-value next step.
+  `_LEVELS`). Each signal's heat is **self-calibrating and variance-aware**: how
+  many *robust sigmas* it sits above its own rolling baseline — **median** center,
+  **MAD** spread (`1.4826*MAD`, floored at 5% of the baseline so a near-constant
+  signal isn't hair-triggered), `_Z_FULL=3` sigmas → heat 100. Robust stats
+  (median/MAD, not mean/std) because on-chain signals are heavy-tailed; the same %
+  move is hotter for a normally-steady signal than a volatile one. The seed
+  baseline is only the prior until the rolling window fills. Weights/thresholds
+  are still a **reasoned prior, NOT calibrated** to real rate-limit events —
+  calibrating against the lander's actual throttling is the highest-value next
+  step. `compute()` excludes a **missing** signal (None) from the weighted average
+  so an absent source can't deflate the score.
+- **Time-of-day baseline (B1b):** when the SQLite history has enough samples for
+  the current UTC hour (`store.hourly_baselines`, refreshed ~half-hourly by
+  `_tod_loop`), a signal's center/scale come from that hour's multi-day
+  distribution instead of the last ~10 min — heat becomes "unusual FOR THIS HOUR."
+  This also fixes B1's ramp self-masking / latching (a surge now is diluted across
+  many days of the same hour, not measured against its own recent window). Falls
+  back per signal/hour to the rolling window below `--tod-min-samples`.
+  `comps[...]["source"]` is `"hour"` or `"window"`.
+- **Persistence** is `store.py` (SQLite, stdlib — still zero-dep). One
+  `data/monitor.db`; schema is derived from `CSV_FIELDS` with `ALTER TABLE ADD
+  COLUMN` evolution (adding a signal is a one-liner, no file migration), appends
+  are ACID (no truncate-then-write corruption window the old CSV had), and
+  baselines/charts/percentile read time-ranged **SQL slices**. `monitor` and
+  `store` import each other, but only inside functions (never at module top), so
+  the cycle resolves lazily. WAL mode; DB access is effectively single-writer
+  (only the surge/terminal loop writes). Legacy per-day CSVs are imported once
+  then unused. See improvements.md D2.
+- **Calibration incidents (C5):** `POST /api/incident` (the ⚑ button) records a real
+  landing/rate-limit incident into an `incidents` table with the current surge
+  snapshot -- ground truth. Never pruned (unlike `samples`). Surfaced on `/api/data`
+  and drawn as chart markers; the full signal context at each incident's `ts` is
+  recoverable from `samples`. Feeds B3 (calibrate the index / fit a nowcast).
+- **Retention (D3):** the surge loop calls `store.prune(db, --retention-days)` every
+  ~6h (and at startup) -- `DELETE WHERE ts < cutoff`. No VACUUM (locks the DB);
+  freed pages are reused by inserts so the file plateaus at ~the window. Keep the
+  window well above the 7-day baseline lookback (default 90).
 
 ---
 

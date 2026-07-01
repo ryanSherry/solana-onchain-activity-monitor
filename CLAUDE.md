@@ -61,6 +61,7 @@ Do these in order. It's intentionally tiny — there is nothing to install.
 | Live data (JSON) | `curl -s http://127.0.0.1:8888/api/data \| python3 -m json.tool \| head -40` |
 | Terminal-only version | `python3 monitor.py` (no browser; prints every 60s) |
 | Custom cadence/port | `python3 server.py --port 9000 --interval 5 --movers-interval 15` |
+| **Run tests** | `python3 -m unittest discover -t . -s tests` (stdlib only, no network) |
 
 To screenshot/verify the UI, drive it with Playwright if available (a headless
 `chromium.launch()` → `goto('http://127.0.0.1:8888')` → `screenshot`). Check for
@@ -72,12 +73,14 @@ To screenshot/verify the UI, drive it with Playwright if available (a headless
 
 | File | Role |
 |------|------|
-| `server.py` | dashboard backend: stdlib `http.server` + two background loops (fast surge loop, slow movers loop) |
+| `server.py` | dashboard backend: stdlib `http.server` + background loops (fast surge, slow movers, slow block sampler) |
 | `dashboard.html` | the page — self-contained, hand-drawn canvas charts, no CDN/JS deps |
 | `monitor.py` | terminal version **and** the Surge Index algorithm (`SurgeTracker`, `SURGE_SIGNALS`, `_LEVELS`) |
-| `sources.py` | all data fetchers + config (`_load_local_env`, `DEFAULT_RPC`, `HOT_VENUES`) |
+| `sources.py` | all data fetchers + config (`_load_local_env`, `RpcPool`, `HOT_VENUES`, `block_stats`) |
+| `store.py` | SQLite persistence (stdlib `sqlite3`) — sample history, baselines, percentile |
+| `tests/` | stdlib `unittest` suite (RpcPool, block_stats, Surge Index, store, surge_context) — no network, fakes injected |
 | `pumpstream.py` | pump.fun launch/graduation websocket (hand-written RFC6455 client) |
-| `data/` | per-day CSVs (gitignored) — also warm the Surge Index baselines on startup |
+| `data/` | `monitor.db` SQLite history (gitignored) — warms the Surge Index baselines on startup. Legacy per-day CSVs, if present, are imported once then unused. |
 
 ---
 
