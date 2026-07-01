@@ -95,6 +95,13 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(got), 2)
         self.assertIsNone(got[-1]["note"])                   # blank stored as NULL
 
+    def test_incident_note_coercion_and_sanitize(self):
+        self.assertEqual(store.add_incident(self.db, 123, 5.0, "CALM")["note"], "123")  # non-str
+        bad = store.add_incident(self.db, "<script>x</script>", 5.0, "CALM")["note"]
+        self.assertNotIn("<", bad)                           # angle brackets stripped
+        self.assertNotIn(">", bad)
+        self.assertIsNone(store.add_incident(self.db, None, 5.0, "CALM")["note"])
+
     def test_incidents_survive_prune(self):
         # incidents are ground truth -- prune only touches samples, never incidents
         store.add_incident(self.db, "keep me", 50.0, "ELEVATED")

@@ -339,8 +339,9 @@ setInterval(updateFresh,1000);
     if(note===null)return;                       // cancelled
     mb.disabled=true;const orig=mb.textContent;
     try{
-      await fetch('/api/incident',{method:'POST',
+      const r=await fetch('/api/incident',{method:'POST',
         headers:{'Content-Type':'application/json'},body:JSON.stringify({note})});
+      if(!r.ok)throw new Error(r.status);            // a 500 must not report success
       mb.textContent='✓ Marked';
       if(typeof tick==='function')tick();          // refresh so the marker appears
     }catch(e){mb.textContent='✗ Failed';}
@@ -478,7 +479,9 @@ function drawHero(cv,times,vals,level,domain,opts){
     c.setLineDash([]);c.globalAlpha=.6;c.fillStyle=col;c.fillText(lab,padL+2,Y(v)-3);c.globalAlpha=1;
   });
   // incident markers (operator-marked ground truth) — drawn before the early
-  // return so they show even when the chart has little data yet
+  // return so they show even when the chart has little data yet. NOTE: inc.note is
+  // untrusted user input; only markers (no text) are drawn. If you ever render the
+  // note, escape it (it's already <>-stripped at store, but don't rely on that).
   ((opts&&opts.incidents)||[]).forEach(inc=>{
     if(inc.ts<t0||inc.ts>t1)return;
     const x=X(inc.ts);

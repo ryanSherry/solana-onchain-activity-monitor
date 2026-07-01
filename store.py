@@ -170,7 +170,11 @@ def add_incident(path, note, surge_score, surge_level):
     the surge snapshot is denormalized here for the chart marker). Kept forever
     (prune only touches samples). Returns the stored row."""
     ts = int(time.time())
-    note = (note or "").strip()[:280] or None
+    # coerce to str (client may send a non-string), cap length, and strip angle
+    # brackets -- defense in depth: the note is user input that may later be
+    # rendered, so keep it un-injectable at the source
+    note = (str(note).strip()[:280].replace("<", "").replace(">", "")
+            if note is not None else "") or None
     with _lock:
         c = _conn(path)
         c.execute("INSERT INTO incidents (ts, note, surge_score, surge_level) "
