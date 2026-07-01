@@ -15,6 +15,9 @@ Endpoints:
     GET /api/data    -> latest snapshot + history + fresh pump rates + movers
     GET /api/surge   -> tiny backoff verdict for a lander to poll (advise_backoff,
                         throttle_factor, level, reason, action)
+    POST /api/incident -> mark a real rate-limit/landing incident now (optional
+                        {"note"}); recorded with the current index as calibration
+                        ground truth, and overlaid on the charts
 """
 
 from __future__ import annotations
@@ -55,12 +58,14 @@ _state = {
     "movers": [],
     "rpc": [],                         # RPC pool health (failover status)
     "block": {},                       # recent-block landing conditions (fill/fail/fee)
+    "incidents": [],                   # operator-marked incidents (last 24h, cached)
     "surge_context": None,             # current surge vs the trailing-week distribution
     "history": deque(maxlen=480),      # fine-grained recent chart (~4h at 30s)
     "history24h": deque(maxlen=6000),  # {t, surge_score} for the 24h chart
 }
 _lock = threading.Lock()
 _pump = None
+_db = None            # SQLite path, set in main -- for the snapshot + POST handler
 
 # Last-known-good recent-block stats (block_fill / block_fail_rate / fee-per-CU).
 # getBlock is heavy (~6 MB), so a dedicated slow loop refreshes this and the fast
@@ -187,6 +192,7 @@ def _surge_loop(rpc, interval, db, retention_days=0):
     last_health = 0.0
     last_ctx = 0.0
     last_prune = 0.0
+    last_inc = 0.0
     cur_skip = None
     while True:
         start = time.time()
@@ -254,6 +260,14 @@ def _surge_loop(rpc, interval, db, retention_days=0):
                     with _lock:
                         _state["sol"] = sp
                 last_sol = now
+            # refresh the cached incident list every ~5 min (also loads it at
+            # startup and ages out incidents past the 24h window); POST refreshes
+            # it immediately. Keeps the /api/data path query-free.
+            if now - last_inc >= 300:
+                inc = store.recent_incidents(db, 86400)
+                with _lock:
+                    _state["incidents"] = inc
+                last_inc = now
             # retention: prune old rows every ~6h (bounds DB growth). Fires on the
             # first tick (last_prune=0), so it also cleans up at startup.
             if retention_days and now - last_prune >= 21600:
@@ -414,6 +428,7 @@ def _snapshot():
             "movers": _state["movers"],
             "rpc": _state["rpc"],
             "block": _state["block"],
+            "incidents": _state["incidents"],
             "surge_context": _state["surge_context"],
         }
     # fresh pump rates (continuous between collection ticks)
@@ -462,6 +477,30 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found", "text/plain")
 
+    def do_POST(self):
+        # mark a real rate-limit / landing incident (ground truth to calibrate the
+        # index). Tailnet-only tool, so no auth. Body: optional {"note": "..."}.
+        if self.path.startswith("/api/incident"):
+            note = None
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if 0 < n <= 65536:                     # bound the read (note is <=280)
+                    d = json.loads(self.rfile.read(n))
+                    if isinstance(d, dict):            # ignore null/str/list/number bodies
+                        note = d.get("note")
+            except (ValueError, TypeError, json.JSONDecodeError):
+                note = None
+            with _lock:
+                latest = dict(_state["latest"])
+            inc = store.add_incident(_db, note, latest.get("surge_score"),
+                                     latest.get("surge_level"))
+            fresh = store.recent_incidents(_db, 86400)     # refresh the cache off-lock
+            with _lock:
+                _state["incidents"] = fresh
+            self._send(200, json.dumps(inc).encode(), "application/json", cache="no-store")
+        else:
+            self._send(404, b"not found", "text/plain")
+
 
 def main():
     ap = argparse.ArgumentParser(description="On-chain activity dashboard server")
@@ -497,6 +536,8 @@ def main():
                          "0 = keep forever. Keep well above --tod-days / 7d.")
     args = ap.parse_args()
 
+    global _db
+    _db = args.db
     rpc, endpoints = sources.build_pool(args.rpc)
     _state["rpc"] = rpc.status()
 

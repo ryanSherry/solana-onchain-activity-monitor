@@ -199,6 +199,11 @@ self-sizes. Only revisit with a narrowly-filtered subscription.
   the cycle resolves lazily. WAL mode; DB access is effectively single-writer
   (only the surge/terminal loop writes). Legacy per-day CSVs are imported once
   then unused. See improvements.md D2.
+- **Calibration incidents (C5):** `POST /api/incident` (the ⚑ button) records a real
+  landing/rate-limit incident into an `incidents` table with the current surge
+  snapshot -- ground truth. Never pruned (unlike `samples`). Surfaced on `/api/data`
+  and drawn as chart markers; the full signal context at each incident's `ts` is
+  recoverable from `samples`. Feeds B3 (calibrate the index / fit a nowcast).
 - **Retention (D3):** the surge loop calls `store.prune(db, --retention-days)` every
   ~6h (and at startup) -- `DELETE WHERE ts < cutoff`. No VACUUM (locks the DB);
   freed pages are reused by inserts so the file plateaus at ~the window. Keep the

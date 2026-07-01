@@ -44,6 +44,11 @@
   .live:not(.off) .pulse{animation:pulse 1.6s infinite}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(20,241,149,.5)}70%{box-shadow:0 0 0 7px rgba(20,241,149,0)}100%{box-shadow:0 0 0 0 rgba(20,241,149,0)}}
   .fresh{font-size:11px;color:var(--mut);font-weight:400;letter-spacing:0;text-transform:none;white-space:nowrap}
+  .markbtn{font:inherit;font-size:11px;font-weight:600;color:var(--mut);
+    background:var(--card);border:1px solid var(--line);border-radius:7px;
+    padding:4px 9px;cursor:pointer;margin-bottom:6px}
+  .markbtn:hover{color:var(--red);border-color:var(--red)}
+  .markbtn:disabled{opacity:.6;cursor:default}
   .solprice{font-size:13px;font-weight:600;color:var(--tx);white-space:nowrap}
   .solprice .chg{margin-left:5px;font-weight:600}
   .rpcbadge{font-size:11px;color:var(--mut);margin-top:3px;white-space:nowrap}
@@ -190,6 +195,7 @@
 <header>
   <h1>SOLANA ON-CHAIN ACTIVITY</h1>
   <div class="meta">
+    <button class="markbtn" id="markbtn" title="Mark a real rate-limit / landing incident happening NOW — recorded as ground truth (with the current index) to calibrate the thresholds, and shown on the charts.">⚑ Mark incident</button>
     <div class="solprice" id="solprice"></div>
     <div class="rpcbadge" id="rpcbadge"></div>
   </div>
@@ -326,6 +332,22 @@ function updateFresh(){const n=Date.now();
   if(mel){mel.textContent='updated '+agoStr(mvAge);mel.style.color=freshColor(mvAge,moversInterval);}
 }
 setInterval(updateFresh,1000);
+// mark a real rate-limit / landing incident (ground truth for calibration)
+(function(){const mb=document.getElementById('markbtn');if(!mb)return;
+  mb.onclick=async()=>{
+    const note=prompt('Mark a rate-limit / landing incident happening NOW.\nOptional note (what happened?):');
+    if(note===null)return;                       // cancelled
+    mb.disabled=true;const orig=mb.textContent;
+    try{
+      const r=await fetch('/api/incident',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({note})});
+      if(!r.ok)throw new Error(r.status);            // a 500 must not report success
+      mb.textContent='✓ Marked';
+      if(typeof tick==='function')tick();          // refresh so the marker appears
+    }catch(e){mb.textContent='✗ Failed';}
+    setTimeout(()=>{mb.textContent=orig;mb.disabled=false;},1500);
+  };
+})();
 function ageCell(created,now){
   if(!created)return '<td>—</td>';
   const s=now-created;let lab,col;
@@ -455,6 +477,19 @@ function drawHero(cv,times,vals,level,domain,opts){
   [[TH.ELEVATED,'#f2a93b','Elevated'],[TH.SURGE,'#ff4d6d','Surging']].forEach(([v,col,lab])=>{
     c.strokeStyle=col;c.globalAlpha=.32;c.setLineDash([4,4]);c.beginPath();c.moveTo(padL,Y(v));c.lineTo(w-padR,Y(v));c.stroke();
     c.setLineDash([]);c.globalAlpha=.6;c.fillStyle=col;c.fillText(lab,padL+2,Y(v)-3);c.globalAlpha=1;
+  });
+  // incident markers (operator-marked ground truth) — drawn before the early
+  // return so they show even when the chart has little data yet. NOTE: inc.note is
+  // untrusted user input; only markers (no text) are drawn. If you ever render the
+  // note, escape it (it's already <>-stripped at store, but don't rely on that).
+  ((opts&&opts.incidents)||[]).forEach(inc=>{
+    if(inc.ts<t0||inc.ts>t1)return;
+    const x=X(inc.ts);
+    c.strokeStyle='#b388ff';c.globalAlpha=.85;c.setLineDash([3,3]);
+    c.beginPath();c.moveTo(x,padT);c.lineTo(x,padT+H);c.stroke();c.setLineDash([]);
+    c.fillStyle='#b388ff';c.beginPath();          // small flag at the top
+    c.moveTo(x-3,padT);c.lineTo(x+3,padT);c.lineTo(x,padT+4);c.closePath();c.fill();
+    c.globalAlpha=1;
   });
   // data (plotted by actual time)
   const pts=[];for(let i=0;i<times.length;i++)if(vals[i]!=null&&times[i]>=t0&&times[i]<=t1)pts.push([times[i],vals[i]]);
@@ -644,12 +679,12 @@ function render(j){
   // hero chart (recent) — FIXED 20-min window (data fills from the right)
   const RECENT_MIN=20;
   const rt=hist.t||[],rs=hist.surge_score||[];
-  drawHero(document.getElementById('hero-chart'),rt,rs,lvl,[now-RECENT_MIN*60,now]);
+  drawHero(document.getElementById('hero-chart'),rt,rs,lvl,[now-RECENT_MIN*60,now],{incidents:j.incidents});
   document.getElementById('chart-label').textContent=`Last ${RECENT_MIN} minutes`;
   document.getElementById('chart-span').textContent='';
   // 24h chart — FIXED 24h window: collected data sits at the right, the rest is empty
   const h24=j.history24h||{t:[],surge_score:[]};
-  drawHero(document.getElementById('hero-chart-24h'),h24.t||[],h24.surge_score||[],lvl,[now-86400,now],{markPeak:true});
+  drawHero(document.getElementById('hero-chart-24h'),h24.t||[],h24.surge_score||[],lvl,[now-86400,now],{markPeak:true,incidents:j.incidents});
   if(h24.t&&h24.t.length>1){
     const sp=(h24.t[h24.t.length-1]-h24.t[0])/3600;
     document.getElementById('chart-span-24').textContent=sp>=1?`${sp.toFixed(0)}h of data so far`:`${Math.round(sp*60)} min of data so far`;

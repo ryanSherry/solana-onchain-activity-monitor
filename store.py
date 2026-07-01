@@ -68,6 +68,10 @@ def _ensure_schema(c):
     for n in cols:                # add columns introduced since the table was made
         if n not in have:
             c.execute('ALTER TABLE samples ADD COLUMN "%s" %s' % (n, _coltype(n)))
+    # operator-marked incidents (ground truth for calibration -- see add_incident)
+    c.execute("CREATE TABLE IF NOT EXISTS incidents "
+              "(ts INTEGER, note TEXT, surge_score REAL, surge_level TEXT)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_incidents_ts ON incidents(ts)")
     c.commit()
 
 
@@ -158,6 +162,37 @@ def prune(path, keep_days):
         cur = c.execute("DELETE FROM samples WHERE ts < ? OR ts IS NULL", (cutoff,))
         c.commit()
         return cur.rowcount
+
+
+def add_incident(path, note, surge_score, surge_level):
+    """Record a real landing/rate-limit incident the operator just hit -- ground
+    truth to calibrate the index against (the signals at this ts live in `samples`;
+    the surge snapshot is denormalized here for the chart marker). Kept forever
+    (prune only touches samples). Returns the stored row."""
+    ts = int(time.time())
+    # coerce to str (client may send a non-string), cap length, and strip angle
+    # brackets -- defense in depth: the note is user input that may later be
+    # rendered, so keep it un-injectable at the source
+    note = (str(note).strip()[:280].replace("<", "").replace(">", "")
+            if note is not None else "") or None
+    with _lock:
+        c = _conn(path)
+        c.execute("INSERT INTO incidents (ts, note, surge_score, surge_level) "
+                  "VALUES (?, ?, ?, ?)", (ts, note, surge_score, surge_level))
+        c.commit()
+    return {"ts": ts, "note": note, "surge_score": surge_score,
+            "surge_level": surge_level}
+
+
+def recent_incidents(path, seconds):
+    """Incidents within the last `seconds`, oldest-first (for the chart overlay)."""
+    cutoff = int(time.time() - seconds)
+    with _lock:
+        c = _conn(path)
+        rows = c.execute(
+            "SELECT ts, note, surge_score, surge_level FROM incidents "
+            "WHERE ts >= ? ORDER BY ts", (cutoff,)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def hourly_baselines(path, signals, days=7, min_samples=60, min_days=2):

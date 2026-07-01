@@ -35,10 +35,17 @@ Its own RpcPool + slow cadence + TTL so the ~6 MB×samples fetch can't flap the
 surge loop. The ground-truth anchor for the algo work (B1–B3). (Idea if we want
 it cheaper: only `getBlock` for fill; keep failure/fee from the cheap sources.)
 
-### A2. Leader-schedule risk  📋
-Combine `getLeaderSchedule` with per-leader skip rates (already derivable from the
-`getBlockProduction` `byIdentity` call we make) → surface "the next N leaders
-include a known skipper." Forward-looking landing risk, nearly free (reuses a call).
+### A2. Leader-schedule risk  ⏸️ deprioritized (wrong altitude — kept for the record)
+Idea: combine `getLeaderSchedule` with per-leader skip rates (derivable from the
+`getBlockProduction` `byIdentity` call we make) → "the next N leaders include a
+known skipper." Forward-looking landing risk, nearly free.
+**Why parked:** its value needs action on a ~1.6s per-leader horizon. A human
+watching a 5s dashboard can't act on that, and the automated lander that could
+already gets leader-aware TPU forwarding natively — this would duplicate a concern
+that lives in the send loop, not a monitoring tool. The *human-actionable* version
+("leaders are broadly skipping → landing is harder now") is the **aggregate skip
+rate we already track** and feed into the index + backoff advice. Revisit only if
+a per-slot automated consumer ever wants it.
 
 ### A3. Hot writable-account priority fees  📋
 `priority_fees` samples programs today; the local fee market that decides if *your*
@@ -119,9 +126,16 @@ are a prior; calibrate with C5. Follow-up: feed it into alerting (C1).
 movers table (scroll or hide columns). Tailnet has phones; glanceability anywhere
 is the core use. Pure CSS, zero-dep. (Visual change — needs a real-device eyeball.)
 
-### C5. Surge Index calibration hooks  📋
-Let an operator mark a real rate-limit incident ("throttled at 14:32") and overlay
-it on the surge chart → tune thresholds against ground truth. Feeds B3.
+### C5. Surge Index calibration hooks  ✅ shipped
+A **⚑ Mark incident** button (and `POST /api/incident`, `{note}` optional) records
+a real rate-limit/landing incident *now*, stamped with the current surge score/
+level, into an `incidents` table (kept forever -- prune never touches it). Recent
+incidents come back on `/api/data` and are drawn as flagged markers on both surge
+charts, so you can eyeball how the index read when landing actually broke. The raw
+signals at each incident's `ts` live in `samples` for offline calibration. This is
+the ground-truth feed that **unblocks B3** (anchor the index to a measured target /
+fit a nowcast). Next: an analysis view/query that scores the index against the
+marked incidents and suggests threshold tweaks.
 
 ### C6. "Recommended action" line  ✅ shipped (with C3)
 The dashboard now shows a single directive under the verdict ("Hold non-critical
