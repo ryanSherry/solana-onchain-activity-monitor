@@ -470,61 +470,69 @@ BLOCK_CU_LIMIT = 48_000_000
 _VOTE_PROGRAM = "Vote111111111111111111111111111111111111111"
 
 
-def block_stats(rpc) -> dict:
-    """One recent finalized block -> direct landing-condition signals:
-      - block_fill:        compute used / BLOCK_CU_LIMIT (the direct congestion read)
-      - block_fail_rate:   NON-VOTE tx failure rate (bots racing and losing = the flood)
-      - block_fee_cu_p50/p90: landed priority-fee-per-CU (micro-lamports/CU) =
+def block_stats(rpc, blocks: int = 3) -> dict:
+    """Aggregate the last `blocks` finalized blocks -> direct landing signals:
+      - block_fill:        mean compute-used / BLOCK_CU_LIMIT (direct congestion)
+      - block_fail_rate:   pooled NON-VOTE tx failure rate (bots racing and losing)
+      - block_fee_cu_p50/p90: pooled landed priority-fee-per-CU (micro-lamports/CU) =
                            the real clearing price to land, vs the prioritization floor
 
-    Vote txs are excluded from the failure/fee figures (they never fail and pay no
-    priority, so they'd dilute both). Heavy (~6 MB/block, no gzip) -> sample on a
-    SLOW cadence and carry forward. Returns {} on failure."""
+    A single block is a very noisy estimate (fill can swing 0.4->1.0 block to
+    block), so we pool several: with congestion evolving over minutes, reducing
+    per-sample noise matters more than freshness. Vote txs are excluded from the
+    failure/fee figures (they never fail and pay no priority). Heavy (~6 MB PER
+    block, no gzip) -> sample on a SLOW cadence. Returns {} on failure."""
     try:
         slot = rpc_call(rpc, "getSlot", [{"commitment": "finalized"}])
     except Exception:
         return {}
-    blk = used = None
-    for s in range(slot, slot - 5, -1):          # step back over any skipped slots
+    got = []
+    s, tries, max_tries = slot, 0, blocks * 2 + 4   # budget for skipped slots
+    while len(got) < blocks and tries < max_tries:
         try:
             b = rpc_call(rpc, "getBlock", [s, {
                 "encoding": "json", "maxSupportedTransactionVersion": 0,
                 "transactionDetails": "full", "rewards": False}], timeout=20)
+            if b and b.get("transactions"):         # skip skipped/empty/null slots
+                got.append((s, b))
         except Exception:
-            continue
-        if b:                                    # some providers answer a skipped
-            blk, used = b, s                     # slot with result:null (no error)
-            break                                # -> keep stepping back instead
-    txs = (blk or {}).get("transactions") or []
-    if not txs:
+            pass
+        s -= 1
+        tries += 1
+    if not got:
         return {}
-    total_cu = nonvote = nonvote_fail = 0
+    total_cu = nonvote = nonvote_fail = total_txs = 0
     fee_per_cu = []
-    for t in txs:
-        meta = t.get("meta") or {}
-        cu = meta.get("computeUnitsConsumed") or 0
-        total_cu += cu
-        msg = (t.get("transaction") or {}).get("message") or {}
-        if _VOTE_PROGRAM in (msg.get("accountKeys") or []):
-            continue
-        nonvote += 1
-        if meta.get("err") is not None:
-            nonvote_fail += 1
-        sigs = (t.get("transaction") or {}).get("signatures") or []
-        priority = max(0, (meta.get("fee") or 0) - 5000 * len(sigs))  # strip base fee
-        if cu > 0:
-            fee_per_cu.append(priority / cu * 1e6)   # micro-lamports per CU
+    for _, b in got:
+        for t in b["transactions"]:
+            total_txs += 1
+            meta = t.get("meta") or {}
+            cu = meta.get("computeUnitsConsumed") or 0
+            total_cu += cu
+            msg = (t.get("transaction") or {}).get("message") or {}
+            if _VOTE_PROGRAM in (msg.get("accountKeys") or []):
+                continue
+            nonvote += 1
+            if meta.get("err") is not None:
+                nonvote_fail += 1
+            sigs = (t.get("transaction") or {}).get("signatures") or []
+            priority = max(0, (meta.get("fee") or 0) - 5000 * len(sigs))  # strip base
+            if cu > 0:
+                fee_per_cu.append(priority / cu * 1e6)   # micro-lamports per CU
     fee_per_cu.sort()
+    n = len(got)
+
     def q(p):
         return round(fee_per_cu[min(len(fee_per_cu) - 1, int(p * len(fee_per_cu)))])
     return {
-        "block_fill": round(min(1.0, total_cu / BLOCK_CU_LIMIT), 4),
+        "block_fill": round(min(1.0, total_cu / (n * BLOCK_CU_LIMIT)), 4),
         "block_fail_rate": round(nonvote_fail / nonvote, 4) if nonvote else None,
         "block_fee_cu_p50": q(0.50) if fee_per_cu else None,
         "block_fee_cu_p90": q(0.90) if fee_per_cu else None,
-        "block_slot": used,
-        "block_txs": len(txs),
+        "block_slot": got[0][0],       # newest slot sampled
+        "block_txs": total_txs,
         "block_nonvote": nonvote,
+        "block_count": n,              # blocks actually aggregated
     }
 
 

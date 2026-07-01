@@ -31,7 +31,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
 import datetime as dt
 import os
 import statistics
@@ -264,59 +263,6 @@ def render(row, movers, warming, pump_connected=False, meme_by_program=None, com
     print("\n".join(L), flush=True)
 
 
-def append_csv(path, row):
-    exists = os.path.exists(path) and os.path.getsize(path) > 0
-    if exists:
-        with open(path, newline="") as f:
-            header = f.readline().rstrip("\r\n").split(",")
-        if header != CSV_FIELDS:
-            # schema changed since this file was started (e.g. new columns) ->
-            # migrate in place so old + new rows stay column-aligned
-            with open(path, newline="") as f:
-                old = list(csv.DictReader(f))
-            tmp = path + ".tmp"                  # atomic: write a temp file, then
-            with open(tmp, "w", newline="") as f:  # os.replace -- never leave a
-                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)  # truncated day file
-                w.writeheader()
-                w.writerows({k: r.get(k) for k in CSV_FIELDS} for r in old)
-            os.replace(tmp, path)
-    with open(path, "a", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
-        if not exists:
-            w.writeheader()
-        w.writerow({k: row.get(k) for k in CSV_FIELDS})
-
-
-_NUMERIC_KEYS = (
-    "nonvote_tps", "total_tps", "skip_rate", "fee_p50", "fee_p90", "fee_p99",
-    "fee_contention", "meme_tps", "meme_fail_rate", "pump_launches_min",
-    "pump_graduations_min", "new_pools_5m", "surge_score",
-    "block_fill", "block_fail_rate", "block_fee_cu_p50", "block_fee_cu_p90",
-)
-
-
-def read_history_rows(csv_dir, day=None):
-    """Parse a day's CSV into row dicts (numeric fields coerced). Warms the
-    SurgeTracker baselines and seeds the dashboard chart on startup.
-    `day` is a YYYYMMDD string; defaults to today (UTC)."""
-    rows = []
-    day = day or dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
-    path = os.path.join(csv_dir, f"activity_{day}.csv")
-    if not os.path.exists(path):
-        return rows
-    with open(path) as f:
-        for r in csv.DictReader(f):
-            out = dict(r)
-            for k in _NUMERIC_KEYS:
-                v = r.get(k)
-                try:
-                    out[k] = float(v) if v not in (None, "") else None
-                except ValueError:
-                    out[k] = None
-            rows.append(out)
-    return rows
-
-
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -331,19 +277,20 @@ def main():
     ap.add_argument("--no-movers", action="store_true", help="skip GeckoTerminal calls")
     ap.add_argument("--no-pump", action="store_true",
                     help="skip the pump.fun launch-rate websocket")
-    ap.add_argument("--csv-dir", default=os.path.join(os.path.dirname(__file__), "data"))
+    ap.add_argument("--db", default=os.path.join(os.path.dirname(__file__), "data", "monitor.db"),
+                    help="SQLite history DB (was per-day CSVs)")
     args = ap.parse_args()
 
+    import store
     rpc, endpoints = sources.build_pool(args.rpc)
 
-    os.makedirs(args.csv_dir, exist_ok=True)
+    store.import_csvs(args.db, os.path.dirname(args.db))   # fold legacy CSVs once
     tracker = SurgeTracker()
-    for r in read_history_rows(args.csv_dir):
+    for r in store.read_recent(args.db, 2000):
         tracker.update(r)
     print(f"RPC pool ({len(endpoints)}): "
           f"{', '.join(sources._node_label(e) for e in endpoints)}", file=sys.stderr)
-    print(f"poll every {args.interval}s · CSV -> {args.csv_dir}/activity_<date>.csv",
-          file=sys.stderr)
+    print(f"poll every {args.interval}s · DB -> {args.db}", file=sys.stderr)
 
     pump = None
     if not args.no_pump and not args.once:
@@ -365,8 +312,7 @@ def main():
 
             render(row, movers, warming, pump_connected, meme_by_program, comps)
 
-            today = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
-            append_csv(os.path.join(args.csv_dir, f"activity_{today}.csv"), row)
+            store.append(args.db, row)
             tracker.update(row)
         except Exception as e:  # keep the loop alive across transient API errors
             print(f"[warn] poll failed: {e}", file=sys.stderr, flush=True)

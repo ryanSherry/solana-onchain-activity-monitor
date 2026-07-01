@@ -143,17 +143,35 @@ self-sizes. Only revisit with a narrowly-filtered subscription.
 
 ## 6. Architecture
 
-- **Two background loops** (`server.py`): a fast **surge loop** (RPC, ~5s,
-  no GeckoTerminal) and a slow **movers loop** (GeckoTerminal, ~15s). Decoupled
-  so the gauge feels live while staying under GeckoTerminal's ~30/min limit.
-  Jito 10s · skip rate 15s · SOL price 45s. All period-accurate (sleep =
-  interval − work).
+- **Background loops** (`server.py`): a fast **surge loop** (RPC, ~5s, no
+  GeckoTerminal), a slow **movers loop** (GeckoTerminal, ~15s), and a slow
+  **block loop** (`getBlock`, ~30s). Decoupled so the gauge feels live while
+  staying under GeckoTerminal's ~30/min limit. Jito 10s · skip rate 15s · SOL
+  price 45s. All period-accurate (sleep = interval − work). The block loop uses
+  its **own RpcPool** (getBlock is ~6 MB × `--block-samples` and heavy — a slow
+  one must not cool the surge loop's primary and flap the fast tick).
+- **Block signals** (`sources.block_stats`): pool the last N blocks (default 3)
+  because one block is a very noisy estimate (fill swings 0.4→1.0 block to block).
+  Vote txs (~half the block) are excluded from the failure/fee figures. Only
+  **fill %** truly needs `getBlock`; failure and fee-per-CU have cheaper,
+  better-sampled sources (`getSignaturesForAddress`, `getRecentPrioritizationFees`),
+  so the block fee-per-CU is displayed but kept OUT of the weighted index.
 - **Last-known-good** on transient source misses (movers, venue data) so the UI
   never blanks; per-section freshness tells the truth when a source lags.
 - **Surge Index** lives in `monitor.py` (`SurgeTracker`, `SURGE_SIGNALS`,
   `_LEVELS`). Weights/thresholds are a **reasoned prior, NOT calibrated** to real
   rate-limit events — calibrating against the lander's actual throttling is the
-  single highest-value next step.
+  single highest-value next step. `compute()` excludes a **missing** signal (None)
+  from the weighted average so an absent source can't deflate the score to 0.
+- **Persistence** is `store.py` (SQLite, stdlib — still zero-dep). One
+  `data/monitor.db`; schema is derived from `CSV_FIELDS` with `ALTER TABLE ADD
+  COLUMN` evolution (adding a signal is a one-liner, no file migration), appends
+  are ACID (no truncate-then-write corruption window the old CSV had), and
+  baselines/charts/percentile read time-ranged **SQL slices**. `monitor` and
+  `store` import each other, but only inside functions (never at module top), so
+  the cycle resolves lazily. WAL mode; DB access is effectively single-writer
+  (only the surge/terminal loop writes). Legacy per-day CSVs are imported once
+  then unused. See improvements.md D2.
 
 ---
 

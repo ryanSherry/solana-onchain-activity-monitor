@@ -213,13 +213,16 @@ server.py        web dashboard backend (stdlib http.server + 2 background loops)
 dashboard.html   the dashboard page (self-contained; canvas charts, no CDN)
 monitor.py       terminal version + the Surge Index algorithm (SurgeTracker)
 sources.py       all data fetchers (RPC, GeckoTerminal, Jito, CoinGecko) + config
+store.py         SQLite persistence (stdlib sqlite3) — history/baselines/percentile
 pumpstream.py    pump.fun launch/graduation websocket (hand-written RFC6455 client)
-data/            per-day CSVs: data/activity_<YYYYMMDD>.csv (gitignored)
+data/            monitor.db SQLite history (gitignored)
 .env.onchain-activity[.example]   local config (RPC URL)
 ```
 
-Both `server.py` and `monitor.py` append to the same daily CSV, so history
-persists across restarts and warms the Surge Index baselines on startup.
+Both `server.py` and `monitor.py` write samples to the same SQLite DB
+(`data/monitor.db`), so history persists across restarts and warms the Surge
+Index baselines on startup. Any legacy `data/activity_<YYYYMMDD>.csv` files are
+imported into the DB once on first run, then unused.
 
 ---
 

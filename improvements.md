@@ -113,16 +113,15 @@ The repo has zero tests. Add stdlib `unittest` for `RpcPool` failover/failback,
 `_surge_context` boundaries, and the Surge Index scoring. Locks in load-bearing
 logic as we keep iterating.
 
-### D2. Migrate persistence to SQLite  ⏭️ (NEXT after A1)
-Replace the per-day CSVs with a single SQLite DB (`sqlite3` is stdlib -> still
-zero-dependency). Motivation surfaced while adding A1's columns: CSV schema
-evolution is painful (in-place header migration) and the in-place rewrite had a
-truncate-then-write corruption window (now mitigated with an atomic temp+replace,
-but it's a band-aid). SQLite gives `ALTER TABLE ADD COLUMN`, ACID durability, and
-lets the baselines / 7-day percentile / time-of-day baseline (B1) be SQL
-aggregations instead of "load every row into Python and sort." Touches
-`append_csv`, `read_history_rows`, `_seed_history`, `_seed_baseline`; keep a CSV
-export for the human-greppable use. Subsumes D3 (retention = `DELETE WHERE`).
+### D2. Migrate persistence to SQLite  ✅ shipped
+`store.py` (stdlib `sqlite3`, still zero-dependency): one `data/monitor.db`,
+schema derived from `CSV_FIELDS` with `ALTER TABLE ADD COLUMN` evolution, ACID
+appends (no corruption window), and SQL time-range slices for baselines / charts
+/ the 7-day percentile. Legacy per-day CSVs are imported once on first run then
+unused. Also fixed a latent index bug: `compute()` now excludes missing signals
+from the weighted average. (Follow-up idea: a `store.export_csv()` for the
+human-greppable use if wanted; and B1's time-of-day baseline is now a cheap SQL
+`GROUP BY`.)
 
 ### D3. Data retention  📋
 Old data grows unbounded; prune beyond the baseline window (becomes a trivial
